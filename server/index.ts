@@ -1,0 +1,20 @@
+import { resolve } from 'node:path';
+import { createApp } from './app.js';
+import { openStore } from './db.js';
+import { seedDemo, seedSkills } from './seed.js';
+
+const demo = process.env.SAG_DEMO === '1';
+const host = process.env.SAG_HOST ?? '127.0.0.1';
+const port = Number(process.env.PORT ?? '3001');
+if (!Number.isInteger(port)||port<1||port>65535) throw new Error('PORT debe ser un puerto válido.');
+if (demo && !['127.0.0.1','localhost','::1'].includes(host)) throw new Error('La demostración solo puede escuchar en la interfaz local.');
+if (demo && process.env.SAG_DB) throw new Error('La demostración utiliza .data/demo.sqlite y no admite SAG_DB.');
+const store = openStore(demo ? '.data/demo.sqlite' : process.env.SAG_DB ?? '.data/sag.sqlite');
+if (demo) await seedDemo(store); else seedSkills(store);
+const origins = process.env.SAG_ORIGINS?.split(',').map(s=>s.trim()).filter(Boolean) ?? [`http://127.0.0.1:${port}`,`http://localhost:${port}`,...(demo?['http://127.0.0.1:5173','http://localhost:5173']:[])];
+const app = createApp({store,demo,uploadsDir:demo?'.data/demo-files':process.env.SAG_FILES??'.data/files',origins,secureCookie:process.env.SAG_SECURE_COOKIE==='1',trustProxy:process.env.SAG_TRUST_PROXY==='1',distDir:resolve('dist')});
+const server = app.listen(port,host,()=>{console.log(`SAG ${demo?'· demostración local':'· aplicación'}: http://${host}:${port}`);});
+let closing = false;
+const close = () => { if(closing)return;closing=true;server.close(()=>{store.close();process.exit(0);});setTimeout(()=>process.exit(1),10000).unref(); };
+process.on('SIGINT',close);
+process.on('SIGTERM',close);

@@ -1,0 +1,20 @@
+[Unit]
+Description=SAG · sitio de prueba con datos ficticios
+After=network.target
+
+[Service]
+Type=simple
+User=sag
+Group=sag
+WorkingDirectory=/opt/sag
+EnvironmentFile=/etc/sag-demo.env
+ExecStart=/usr/bin/node --experimental-sqlite --import tsx server/index.ts
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

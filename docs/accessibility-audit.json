@@ -1,0 +1,86 @@
+[
+  {
+    "name": "login",
+    "violations": []
+  },
+  {
+    "name": "today",
+    "violations": []
+  },
+  {
+    "name": "agenda",
+    "violations": []
+  },
+  {
+    "name": "students",
+    "violations": []
+  },
+  {
+    "name": "assignments",
+    "violations": []
+  },
+  {
+    "name": "talent",
+    "violations": []
+  },
+  {
+    "name": "reports",
+    "violations": []
+  },
+  {
+    "name": "settings",
+    "violations": []
+  },
+  {
+    "name": "student-form",
+    "violations": []
+  },
+  {
+    "name": "student-drawer",
+    "violations": []
+  },
+  {
+    "name": "assignment-drawer",
+    "violations": []
+  },
+  {
+    "name": "create-menu",
+    "violations": []
+  },
+  {
+    "name": "assignment-form",
+    "violations": []
+  },
+  {
+    "name": "assignment-form-new-skill",
+    "violations": []
+  },
+  {
+    "name": "evaluation-form",
+    "violations": []
+  },
+  {
+    "name": "progress-form",
+    "violations": []
+  },
+  {
+    "name": "students-timeline",
+    "violations": []
+  },
+  {
+    "name": "student-plan",
+    "violations": []
+  },
+  {
+    "name": "director-overview",
+    "violations": []
+  },
+  {
+    "name": "meeting-form",
+    "violations": []
+  },
+  {
+    "name": "director-area",
+    "violations": []
+  }
+]

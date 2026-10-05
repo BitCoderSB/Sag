@@ -1,0 +1,31 @@
+import { chromium } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
+import { mkdirSync } from 'node:fs';
+mkdirSync('docs/screenshots', { recursive: true });
+const browser = await chromium.launch();
+const context = await browser.newContext({ viewport: { width: 1440, height: 1050 }, deviceScaleFactor: 1 });
+const page = await context.newPage();
+await page.emulateMedia({ reducedMotion: 'reduce' });
+const errors = [];
+page.on('pageerror', error => errors.push(error.message));
+page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+await page.goto('http://127.0.0.1:5173');
+await page.getByRole('button', { name: 'Explorar Software', exact: true }).waitFor();
+await page.screenshot({ path: 'docs/screenshots/login.png', fullPage: true });
+await page.getByRole('button', { name: 'Explorar Software', exact: true }).click();
+await page.getByRole('heading', { name: 'Tu área, en perspectiva.' }).waitFor();
+await page.evaluate(() => document.fonts.ready);
+await page.screenshot({ path: 'docs/screenshots/dashboard.png', fullPage: true });
+for (const nav of ['Alumnos', 'Actividades', 'Talento', 'Reportes', 'Configuración']) {
+  await page.locator('.sidebar .nav-item').filter({ hasText: nav }).click();
+  await page.waitForTimeout(180);
+  await page.screenshot({ path: `docs/screenshots/${nav.toLowerCase()}.png`, fullPage: true });
+}
+await page.goto('http://127.0.0.1:5173/#dashboard');
+await page.getByRole('heading', { name: 'Tu área, en perspectiva.' }).waitFor();
+const accessibility = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
+console.log(JSON.stringify({ errors, violations: accessibility.violations.map(v => ({ id: v.id, impact: v.impact, description: v.description, nodes: v.nodes.map(n => ({ target: n.target, summary: n.failureSummary })).slice(0, 8) })) }, null, 2));
+await page.setViewportSize({ width: 390, height: 844 });
+await page.screenshot({ path: 'docs/screenshots/mobile.png', fullPage: true });
+console.log('mobile overflow', await page.evaluate(() => ({ viewport: innerWidth, doc: document.documentElement.scrollWidth })));
+await browser.close();
