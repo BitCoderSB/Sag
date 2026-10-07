@@ -1,0 +1,3 @@
+# Scripts y unidades que corren en Linux: siempre con fin de línea LF, aunque se clone en Windows.
+*.sh text eol=lf
+deploy/*.service text eol=lf
