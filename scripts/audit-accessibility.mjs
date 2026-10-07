@@ -20,7 +20,7 @@ await page.getByRole('heading', { name: 'Inicia sesión' }).waitFor();
 await audit('login');
 await page.getByRole('button', { name: 'Responsable de Software', exact: true }).click();
 await page.getByRole('heading', { level: 1, name: /^(Software|Hardware|Investigación)$/ }).waitFor();
-for (const route of ['today', 'agenda', 'students', 'assignments', 'talent', 'reports', 'settings']) {
+for (const route of ['today', 'board', 'board?v=day', 'board?v=people', 'board?v=bank', 'agenda', 'students', 'assignments', 'talent', 'reports', 'settings']) {
   await page.goto(`${base}/#${route}`);
   await page.locator('main h1').first().waitFor();
   await audit(route);
@@ -45,7 +45,8 @@ await page.getByRole('button', { name: 'Nueva habilidad', exact: true }).click()
 await audit('assignment-form-new-skill');
 await page.keyboard.press('Escape');
 await page.goto(`${base}/#today`);
-await page.locator('.next .next-action').click();
+// Los pendientes van agrupados y a la vista: se usa la acción del grupo «Por evaluar».
+await page.locator('.tg-action', { hasText: /^Evaluar$/ }).first().click();
 await page.getByRole('slider').first().focus(); await page.keyboard.press('8');
 await audit('evaluation-form');
 await page.keyboard.press('Escape');

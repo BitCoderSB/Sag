@@ -6,7 +6,7 @@ import { dirname, resolve } from 'node:path';
 import type { User } from '../shared/types.js';
 
 const scrypt = promisify(nodeScrypt);
-export type Entity = 'students' | 'assignments' | 'reviews' | 'deliveries' | 'evaluations' | 'skills' | 'notes' | 'attachments' | 'audit' | 'meetings';
+export type Entity = 'students' | 'assignments' | 'reviews' | 'deliveries' | 'evaluations' | 'skills' | 'notes' | 'attachments' | 'audit' | 'meetings' | 'drafts';
 export interface StoredUser extends User { passwordHash: string }
 export interface StoredSession { hash: string; user_id: string; csrf: string; expires_at: number }
 export class Store {
@@ -21,7 +21,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS sessions (hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, csrf TEXT NOT NULL, expires_at INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires_at);
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
-    for (const table of ['students','assignments','reviews','deliveries','evaluations','skills','notes','attachments','audit','meetings']) {
+    for (const table of ['students','assignments','reviews','deliveries','evaluations','skills','notes','attachments','audit','meetings','drafts']) {
       this.db.exec(`CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, data TEXT NOT NULL CHECK(json_valid(data)));`);
     }
     this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS student_registration ON students(upper(json_extract(data, '$.registration')));
@@ -29,6 +29,7 @@ export class Store {
   }
   all<T>(table: Entity): T[] { return this.db.prepare(`SELECT data FROM ${table} ORDER BY rowid`).all().map(row => JSON.parse(row.data as string)); }
   get<T>(table: Entity, id: string): T | undefined { const row = this.db.prepare(`SELECT data FROM ${table} WHERE id=?`).get(id); return row ? JSON.parse(row.data as string) : undefined; }
+  remove(table: Entity, id: string) { this.db.prepare(`DELETE FROM ${table} WHERE id=?`).run(id); }
   put<T extends { id: string }>(table: Entity, data: T): T { this.db.prepare(`INSERT INTO ${table}(id,data) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data`).run(data.id, JSON.stringify(data)); return data; }
   transaction<T>(fn: () => T): T {
     this.db.exec('BEGIN IMMEDIATE');

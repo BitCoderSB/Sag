@@ -1,4 +1,4 @@
-import { useId, type ButtonHTMLAttributes, type CSSProperties, type ReactNode } from 'react';
+import { useId, useState, type ButtonHTMLAttributes, type CSSProperties, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import * as Dropdown from '@radix-ui/react-dropdown-menu';
 import { Plus, ClipboardText, CalendarPlus, UserPlus, TrendUp, X, MagnifyingGlass, ArrowRight, CircleNotch, WarningCircle, CheckCircle, CaretDown, Code, Cpu, Flask, StackSimple, ArrowUpRight, DotsThree, Barricade, HourglassMedium, Exam } from '@phosphor-icons/react';
@@ -29,7 +29,8 @@ export function StatusAvatar({ name, avatar, health, size = 'md' }: { name: stri
 }
 /** Pictograma de avance de una actividad: asignada, entregada, evaluada. */
 export function Steps({ steps, label, size = 'sm' }: { steps: StepState[]; label: string; size?: 'sm' | 'lg' }) {
-  const names = ['Asignada', 'Entregada', 'Evaluada'];
+  // Sustantivos: nombran la etapa, no afirman que ya ocurrió. El color del punto dice cómo va.
+  const names = ['Asignada', 'Entrega', 'Evaluación'];
   return <span className={`steps steps-${size}`} role="img" aria-label={label} title={label}>
     {steps.map((s, i) => <span key={i} className={`step step-${s}`}>
       {i > 0 && <span className={`step-line ${steps[i - 1] === 'done' && s !== 'off' ? 'is-filled' : ''}`} aria-hidden="true" />}
@@ -39,17 +40,19 @@ export function Steps({ steps, label, size = 'sm' }: { steps: StepState[]; label
   </span>;
 }
 /** Dona de segmentos; cada segmento se dibuja al aparecer. */
-export function Donut({ segments, size = 112, stroke = 12, children, label }: { segments: { value: number; tone: string }[]; size?: number; stroke?: number; children?: ReactNode; label: string }) {
+/** Con `onPick`/`onHover` cada segmento responde al ratón (resaltado y filtro); el equivalente con teclado lo da la leyenda que acompaña a la dona. */
+export function Donut({ segments, size = 112, stroke = 12, children, label, active = null, onHover, onPick }: { segments: { value: number; tone: string; id?: string }[]; size?: number; stroke?: number; children?: ReactNode; label: string; active?: string | null; onHover?: (id: string | null) => void; onPick?: (id: string) => void }) {
   const radius = (size - stroke) / 2; const length = 2 * Math.PI * radius;
   const total = segments.reduce((n, s) => n + s.value, 0) || 1;
   const gap = segments.filter(s => s.value).length > 1 ? 3 : 0;
   let offset = 0;
-  return <div className="donut" style={{ width: size, height: size }} role="img" aria-label={label}>
+  return <div className={`donut ${onPick ? 'donut-live' : ''} ${active ? 'has-active' : ''}`} style={{ width: size, height: size }} role="img" aria-label={label}>
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden="true">
       <circle cx={size / 2} cy={size / 2} r={radius} className="donut-track" strokeWidth={stroke} fill="none" />
       {segments.filter(s => s.value).map((s, i) => {
         const arc = Math.max(0, s.value / total * length - gap);
-        const node = <circle key={i} cx={size / 2} cy={size / 2} r={radius} fill="none" strokeWidth={stroke} strokeLinecap="butt" className={`donut-arc tone-${s.tone}`}
+        const node = <circle key={i} cx={size / 2} cy={size / 2} r={radius} fill="none" strokeWidth={stroke} strokeLinecap="butt" className={`donut-arc tone-${s.tone} ${active && s.id === active ? 'is-active' : ''}`}
+          onPointerEnter={onHover && s.id ? () => onHover(s.id!) : undefined} onPointerLeave={onHover ? () => onHover(null) : undefined} onClick={onPick && s.id ? () => onPick(s.id!) : undefined}
           style={{ strokeDasharray: `${arc} ${length}`, strokeDashoffset: -offset, ['--arc' as string]: `${arc}px`, animationDelay: `${i * 70}ms` }} transform={`rotate(-90 ${size / 2} ${size / 2})`} />;
         offset += s.value / total * length;
         return node;
@@ -134,8 +137,28 @@ export function ErrorMessage({ message }: { message: string }) {
 export function Notice({ tone = 'neutral', icon, children }: { tone?: Tone; icon?: ReactNode; children: ReactNode }) {
   return <div className={`notice notice-${tone}`}>{icon}<div>{children}</div></div>;
 }
+/** Diálogo o panel abierto más reciente. Las listas desplegables se dibujan dentro de él: fuera, su bloqueo de
+ *  desplazamiento impide usar la ruedita del ratón y el lector de pantalla las trata como fuera del diálogo. */
+export function openLayer(): HTMLElement | undefined {
+  const all = document.querySelectorAll<HTMLElement>('[role="dialog"][data-state="open"]');
+  return all[all.length - 1];
+}
+/** Al abrir, el foco va al primer campo (o al marcado con autoFocus), no a la X: se puede escribir de inmediato. */
+function focusFirstField(e: Event) {
+  const root = e.currentTarget as HTMLElement;
+  const target = root.querySelector<HTMLElement>('.dialog-body [data-autofocus], .dialog-body [autofocus]') ?? root.querySelector<HTMLElement>('.dialog-body :is(input:not([type="hidden"]):not(.sr-only), select, textarea, button.rich-select):not(:disabled)');
+  if (target) { e.preventDefault(); target.focus(); }
+}
+/** Con cambios sin guardar, un clic fuera no cierra y Escape pide una segunda pulsación: no se pierde lo escrito por accidente. */
 export function Modal({ onClose, title, description, children, wide = false }: { onClose: () => void; title: string; description?: ReactNode; children: ReactNode; wide?: boolean }) {
-  return <Dialog.Root open onOpenChange={value => !value && onClose()}><Dialog.Portal><Dialog.Overlay className="overlay" /><Dialog.Content className={`dialog ${wide ? 'dialog-wide' : ''}`} aria-describedby={undefined}><div className="dialog-head"><div><Dialog.Title>{title}</Dialog.Title>{description && <p className="dialog-description">{description}</p>}</div><Dialog.Close asChild><IconButton label="Cerrar ventana"><X size={18} /></IconButton></Dialog.Close></div>{children}</Dialog.Content></Dialog.Portal></Dialog.Root>;
+  const [dirty, setDirty] = useState(false); const [warn, setWarn] = useState(false);
+  const guard = (e: Event) => { if (!dirty) return; e.preventDefault(); if (e.type === 'keydown' && warn) { onClose(); return; } setWarn(true); };
+  return <Dialog.Root open onOpenChange={value => !value && onClose()}><Dialog.Portal><Dialog.Overlay className="overlay" /><Dialog.Content className={`dialog ${wide ? 'dialog-wide' : ''}`} aria-describedby={undefined} onOpenAutoFocus={focusFirstField}
+    onInput={() => { if (!dirty) setDirty(true); }} onEscapeKeyDown={guard} onPointerDownOutside={guard} onInteractOutside={e => { if (dirty) e.preventDefault(); }}>
+    <div className="dialog-head"><div><Dialog.Title>{title}</Dialog.Title>{description && <p className="dialog-description">{description}</p>}</div><Dialog.Close asChild><IconButton label="Cerrar ventana"><X size={18} /></IconButton></Dialog.Close></div>
+    {warn && <p className="dialog-discard" role="alert"><WarningCircle size={16} weight="fill" aria-hidden="true" />Tienes cambios sin guardar. Presiona Esc otra vez o la X para descartarlos.</p>}
+    {children}
+  </Dialog.Content></Dialog.Portal></Dialog.Root>;
 }
 export function Drawer({ onClose, label, children }: { onClose: () => void; label: string; children: ReactNode }) {
   return <Dialog.Root open onOpenChange={value => !value && onClose()}><Dialog.Portal><Dialog.Overlay className="overlay overlay-drawer" /><Dialog.Content className="drawer" aria-describedby={undefined}><Dialog.Title className="sr-only">{label}</Dialog.Title><Dialog.Close asChild><IconButton className="drawer-close" label="Cerrar detalle"><X size={18} /></IconButton></Dialog.Close>{children}</Dialog.Content></Dialog.Portal></Dialog.Root>;
@@ -176,7 +199,8 @@ export function SectionTitle({ title, count, children, id }: { title: string; co
 }
 export interface MenuItem { label: string; icon?: ReactNode; onSelect: () => void; danger?: boolean; disabled?: boolean }
 export function Menu({ label, items, trigger, align = 'end' }: { label: string; items: (MenuItem | 'separator')[]; trigger?: ReactNode; align?: 'start' | 'end' }) {
-  return <Dropdown.Root modal={false}><Dropdown.Trigger asChild>{trigger ?? <IconButton label={label} onClick={e => e.stopPropagation()}><DotsThree size={20} weight="bold" /></IconButton>}</Dropdown.Trigger><Dropdown.Portal><Dropdown.Content className="menu" align={align} sideOffset={6} collisionPadding={12} onClick={e => e.stopPropagation()}>{items.map((item, i) => item === 'separator' ? <Dropdown.Separator key={i} className="menu-separator" /> : <Dropdown.Item key={item.label} disabled={item.disabled} className={`menu-item ${item.danger ? 'menu-item-danger' : ''}`} onSelect={item.onSelect}>{item.icon}{item.label}</Dropdown.Item>)}</Dropdown.Content></Dropdown.Portal></Dropdown.Root>;
+  const [layer, setLayer] = useState<HTMLElement | undefined>();
+  return <Dropdown.Root modal={false} onOpenChange={o => o && setLayer(openLayer())}><Dropdown.Trigger asChild>{trigger ?? <IconButton label={label} onClick={e => e.stopPropagation()}><DotsThree size={20} weight="bold" /></IconButton>}</Dropdown.Trigger><Dropdown.Portal container={layer}><Dropdown.Content className="menu" align={align} sideOffset={6} collisionPadding={12} onClick={e => e.stopPropagation()}>{items.map((item, i) => item === 'separator' ? <Dropdown.Separator key={i} className="menu-separator" /> : <Dropdown.Item key={item.label} disabled={item.disabled} className={`menu-item ${item.danger ? 'menu-item-danger' : ''}`} onSelect={item.onSelect}>{item.icon}{item.label}</Dropdown.Item>)}</Dropdown.Content></Dropdown.Portal></Dropdown.Root>;
 }
 export type CreateKind = 'assignment' | 'progress' | 'review' | 'student';
 const CREATE_OPTIONS: { kind: CreateKind; label: string; hint: string; icon: typeof Plus; tone: Tone }[] = [

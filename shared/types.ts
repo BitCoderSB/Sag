@@ -6,10 +6,15 @@ export interface Area { id: AreaId; name: string; description: string }
 export interface User { id: string; name: string; email: string; role: Role; areaId: AreaId | null }
 export interface Session { user: User | null; csrf: string | null; demo: boolean }
 export type StudentStatus = 'active' | 'paused' | 'completed';
+/** Pausa de la participación en un área (baja temporal, salud, exámenes o sin contacto). Las otras áreas no cambian. */
+export type PauseKind = 'temporary' | 'health' | 'exams' | 'no_contact';
+export interface StudentPause { kind: PauseKind; reason: string; since: string; returnAt: string | null }
 export interface Student {
   id: string; name: string; registration: string; email: string; career: string;
   semester: string; modalities: string[]; status: StudentStatus; areaIds: AreaId[];
   technologies: string[]; createdAt: string; version: number; openAssignmentCount?: number;
+  /** Pausas por área. Cada responsable ve solo la de su área; el jefe, todas. */
+  pauses?: Partial<Record<AreaId, StudentPause>>;
   /** Animal del avatar (ver `shared/avatars.ts`). El servidor lo asigna al crear y rellena los expedientes anteriores. */
   avatar?: AnimalId;
   /** Periodo de participación (AAAA-MM-DD). Opcional: sin él, el plan usa la primera y la última actividad. */
@@ -27,6 +32,10 @@ export interface Assignment {
   links: ResourceLink[]; createdAt: string; updatedAt: string; version: number;
   /** Cuándo empieza a trabajarla (para el plan). Sin él, se usa la fecha de asignación. */
   startAt?: string | null;
+  /** Desde cuándo tiene impedimento (lo pone el servidor al anotarlo y lo quita al resolverlo). */
+  blockedSince?: string | null;
+  /** Hasta cuándo se espera: antes de esa fecha la actividad está «en espera» y no pide atención. */
+  blockedReviewAt?: string | null;
   /** Fase o etapa del plan (p. ej. «Marco teórico» en una tesis). Vacía si no aplica. */
   phase?: string;
 }
@@ -64,11 +73,15 @@ export interface Meeting {
 export interface StudentNote { id: string; studentId: string; areaId: AreaId; authorName: string; text: string; createdAt: string }
 export interface Attachment { id: string; assignmentId: string; name: string; size: number; kind: 'instruction' | 'evidence'; createdAt: string }
 export interface AuditEvent { id: string; actorName: string; areaId: AreaId | null; action: string; entityId: string; detail: string; createdAt: string }
+/** Actividad preparada en el banco del área, todavía sin alumno. Se asigna arrastrándola a un alumno o desde su menú. */
+export interface ActivityDraft { id: string; areaId: AreaId; title: string; description: string; skillIds: string[]; links: ResourceLink[]; phase: string; createdAt: string; updatedAt: string; version: number }
 export interface Workspace {
   user: User; areas: Area[]; students: Student[]; assignments: Assignment[];
   reviews: Review[]; skills: Skill[]; deliveries: Delivery[]; evaluations: Evaluation[];
   notes: StudentNote[]; attachments: Attachment[]; audit: AuditEvent[];
   meetings: Meeting[];
+  /** Banco de actividades del área (el jefe ve los de todas). Opcional para respuestas anteriores. */
+  drafts?: ActivityDraft[];
 }
 export const AREAS: Area[] = [
   { id: 'software', name: 'Software', description: 'Desarrollo y experiencias digitales' },

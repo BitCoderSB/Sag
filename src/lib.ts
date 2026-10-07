@@ -1,11 +1,20 @@
-import type { AreaId, Assignment, Evaluation, Meeting, Review, Student, Workspace } from '../shared/types';
+import type { AreaId, PauseKind, Assignment, Evaluation, Meeting, Review, Student, Workspace } from '../shared/types';
 
 const zone = 'America/Mexico_City';
 export const DAY = 86_400_000;
 
-export const dateKey = (date: string | Date = new Date()) => new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(date));
+// Crear un Intl.DateTimeFormat es caro: se reutiliza uno por combinación de opciones (el calendario formatea miles de fechas).
+const keyFormat = new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' });
+const formats = new Map<string, Intl.DateTimeFormat>();
+const formatter = (options: Intl.DateTimeFormatOptions) => {
+  // La clave conserva las opciones en undefined: anulan los valores por omisión (día y mes).
+  const id = Object.entries(options).map(([k, v]) => `${k}=${v}`).join('|'); let fmt = formats.get(id);
+  if (!fmt) { fmt = new Intl.DateTimeFormat('es-MX', { timeZone: zone, day: 'numeric', month: 'short', ...options }); formats.set(id, fmt); }
+  return fmt;
+};
+export const dateKey = (date: string | Date = new Date()) => keyFormat.format(new Date(date));
 export const today = () => dateKey();
-export const formatDate = (date: string | Date, options: Intl.DateTimeFormatOptions = {}) => new Intl.DateTimeFormat('es-MX', { timeZone: zone, day: 'numeric', month: 'short', ...options }).format(new Date(date));
+export const formatDate = (date: string | Date, options: Intl.DateTimeFormatOptions = {}) => formatter(options).format(new Date(date));
 export const formatTime = (date: string) => formatDate(date, { day: undefined, month: undefined, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 export const fullDate = (date: string | Date) => formatDate(date, { weekday: 'long', month: 'long', year: 'numeric' });
 export const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
@@ -25,7 +34,8 @@ export const reviewLabels = { follow_up: 'Seguimiento', delivery: 'Entrega', eva
 export const reviewStatusLabels = { scheduled: 'Programada', completed: 'Realizada', cancelled: 'Cancelada', missed: 'No se realizó' };
 export const statusLabels = { in_progress: 'En curso', pending_review: 'Por evaluar', changes_requested: 'Corrigiendo', completed: 'Terminada', cancelled: 'Cancelada' };
 export const isOpen = (a: Assignment) => !['completed', 'cancelled'].includes(a.status);
-export const isLate = (a: Assignment, w?: Workspace) => isOpen(a) && !!a.dueAt && new Date(a.dueAt) < new Date() && !(w?.deliveries.some(d => d.assignmentId === a.id && d.completeness === 'complete'));
+/** Atrasada: venció sin entrega completa. Una actividad en espera por un impedimento no cuenta: su reloj está detenido. */
+export const isLate = (a: Assignment, w?: Workspace) => isOpen(a) && !!a.dueAt && new Date(a.dueAt) < new Date() && !isWaiting(a) && !(w?.deliveries.some(d => d.assignmentId === a.id && d.completeness === 'complete'));
 export const nextReview = (w: Workspace, studentId: string) => w.reviews.filter(r => r.studentId === studentId && r.status === 'scheduled' && new Date(r.startsAt) >= new Date()).sort((a, b) => a.startsAt.localeCompare(b.startsAt))[0];
 export const startOfToday = () => Date.parse(`${today()}T00:00:00-06:00`);
 export const isPastUnrecorded = (r: Review) => r.status === 'scheduled' && Date.parse(r.startsAt) < Date.now();
@@ -34,6 +44,8 @@ const noon = (key: string) => Date.parse(`${key}T12:00:00-06:00`);
 export const dayDiff = (date: string | Date) => Math.round((noon(dateKey(date)) - noon(today())) / DAY);
 
 /** "hoy", "mañana", "ayer", "el jueves", "hace 3 días", "el 12 oct" */
+/** «desde hace 3 días»: cuánto lleva detenida una actividad con impedimento. */
+export const blockedSince = (a: Assignment) => `desde ${relativeDay(a.blockedSince ?? a.updatedAt)}`;
 export function relativeDay(date: string | Date) {
   const diff = dayDiff(date);
   if (diff === 0) return 'hoy';
@@ -70,25 +82,35 @@ export function greeting() {
   return hour < 12 ? 'Buenos días' : hour < 19 ? 'Buenas tardes' : 'Buenas noches';
 }
 
-export type Tone = 'neutral' | 'info' | 'ok' | 'warn' | 'danger';
+export type Tone = 'neutral' | 'info' | 'ok' | 'warn' | 'danger' | 'idle' | 'wait';
+
+/* ---------- Impedimento en espera ----------
+   Con fecha de revisión futura, la actividad está «en espera»: no pide atención y no cuenta como atrasada.
+   Ese día vuelve como pendiente («revisar impedimento») y, si pasa la fecha sin atenderlo, sube a rojo. */
+export const isWaiting = (a: Assignment) => !!a.blockedReason && !!a.blockedReviewAt && a.blockedReviewAt > today();
+/** Pasó la fecha que se puso para revisarlo (o lleva más de una semana sin fecha) y nadie lo atendió. */
+export const blockEscalated = (a: Assignment) => !!a.blockedReason && !isWaiting(a) && (a.blockedReviewAt ? a.blockedReviewAt < today() : dayDiff(a.blockedSince ?? a.updatedAt) <= -7);
+export const PAUSE_LABELS: Record<PauseKind, string> = { temporary: 'Baja temporal', health: 'Salud o asunto personal', exams: 'Exámenes o vacaciones', no_contact: 'Sin contacto' };
+/** Pausa de la participación del alumno en un área. */
+export const pauseOf = (s: Student, areaId?: AreaId | null) => areaId ? s.pauses?.[areaId] : undefined;
 
 /** Workspace limitado a lo que le corresponde ver en las vistas de seguimiento. */
 export function scoped(w: Workspace, area: AreaId | 'all' = 'all'): Workspace {
   const own = w.user.role !== 'director' ? w.user.areaId : area === 'all' ? null : area;
   if (!own) return w;
-  return { ...w, students: w.students.filter(s => s.areaIds.includes(own)), assignments: w.assignments.filter(a => a.areaId === own), reviews: w.reviews.filter(r => r.areaId === own), meetings: (w.meetings ?? []).filter(m => m.areaIds.includes(own)) };
+  return { ...w, students: w.students.filter(s => s.areaIds.includes(own)).map(s => s.status === 'active' && s.pauses?.[own] ? { ...s, status: 'paused' as const } : s), assignments: w.assignments.filter(a => a.areaId === own), reviews: w.reviews.filter(r => r.areaId === own), meetings: (w.meetings ?? []).filter(m => m.areaIds.includes(own)) };
 }
 
 export function assignmentState(a: Assignment, w: Workspace): { label: string; tone: Tone } {
   if (a.status === 'cancelled') return { label: 'Cancelada', tone: 'neutral' };
   if (a.status === 'completed') return { label: 'Terminada', tone: 'ok' };
   if (a.status === 'pending_review') return { label: 'Por evaluar', tone: 'info' };
-  if (a.blockedReason) return { label: 'Con impedimento', tone: 'danger' };
+  if (a.blockedReason) return isWaiting(a) ? { label: 'En espera', tone: 'wait' } : { label: 'Con impedimento', tone: blockEscalated(a) ? 'danger' : 'warn' };
   if (isLate(a, w)) return w.deliveries.some(d => d.assignmentId === a.id && d.completeness === 'not_submitted') ? { label: 'No entregó', tone: 'warn' } : { label: 'Atrasada', tone: 'warn' };
   return { label: statusLabels[a.status], tone: 'neutral' };
 }
 
-export type Health = 'blocked' | 'late' | 'review' | 'changes' | 'active' | 'idle' | 'paused' | 'done';
+export type Health = 'blocked' | 'late' | 'review' | 'waiting' | 'changes' | 'active' | 'idle' | 'paused' | 'done';
 /**
  * Un solo vocabulario y una sola paleta para todas las vistas.
  * `tone` colorea el fondo solo cuando algo pide atención; `dot` es el semáforo
@@ -100,7 +122,8 @@ export const HEALTH: Record<Health, { label: string; tone: Tone; dot: Tone }> = 
   review: { label: 'Por evaluar', tone: 'info', dot: 'info' },
   changes: { label: 'Corrigiendo', tone: 'neutral', dot: 'ok' },
   active: { label: 'Al día', tone: 'neutral', dot: 'ok' },
-  idle: { label: 'Sin actividad', tone: 'neutral', dot: 'neutral' },
+  waiting: { label: 'En espera', tone: 'neutral', dot: 'wait' },
+  idle: { label: 'Sin actividad', tone: 'idle', dot: 'idle' },
   paused: { label: 'En pausa', tone: 'neutral', dot: 'neutral' },
   done: { label: 'Terminó', tone: 'neutral', dot: 'neutral' },
 };
@@ -111,31 +134,34 @@ export function activitySteps(a: Assignment, w: Workspace): { steps: [StepState,
   if (a.status === 'cancelled') return { steps: ['off', 'off', 'off'], label: 'Cancelada' };
   if (a.status === 'completed') return { steps: ['done', 'done', 'done'], label: 'Asignada, entregada y evaluada' };
   if (a.status === 'changes_requested') return { steps: ['done', 'done', 'warn'], label: 'Evaluada; está corrigiendo' };
-  if (a.status === 'pending_review') return { steps: ['done', 'done', a.blockedReason ? 'danger' : 'current'], label: 'Entregada, falta evaluar' };
+  if (a.status === 'pending_review') return { steps: ['done', 'done', 'current'], label: 'Entrega registrada, falta evaluar' };
   const partial = w.deliveries.some(d => d.assignmentId === a.id && d.completeness === 'partial');
-  const second: StepState = a.blockedReason ? 'danger' : isLate(a, w) ? 'warn' : partial ? 'partial' : 'current';
-  return { steps: ['done', second, 'todo'], label: a.blockedReason ? 'Algo le impide avanzar' : isLate(a, w) ? 'Atrasada: no ha entregado' : partial ? 'Entregó un avance; falta la entrega final' : 'Trabajando; aún no entrega' };
+  const second: StepState = a.blockedReason ? isWaiting(a) ? 'current' : 'danger' : isLate(a, w) ? 'warn' : partial ? 'partial' : 'current';
+  return { steps: ['done', second, 'todo'], label: a.blockedReason ? isWaiting(a) ? 'En espera de algo externo' : 'Algo le impide avanzar' : isLate(a, w) ? 'Venció sin entrega registrada' : partial ? 'Avance registrado; falta la entrega final' : 'En curso; sin entrega registrada' };
 }
 
 const WORK_ACTIONS = new Set(['delivery_recorded', 'non_delivery_confirmed', 'evaluation_recorded', 'review_updated', 'review_created', 'assignment_created', 'assignment_updated', 'student_created', 'student_joined', 'note_created']);
 /** Registros que hizo hoy el usuario actual. */
 export const actionsToday = (w: Workspace) => w.audit.filter(e => e.actorName === w.user.name && dateKey(e.createdAt) === today() && WORK_ACTIONS.has(e.action)).length;
 /** Grupos que se usan en Hoy, Panorama y Alumnos, con los mismos nombres que las insignias. */
-export type HealthGroup = 'blocked' | 'late' | 'review' | 'ontrack' | 'idle';
+export type HealthGroup = 'blocked' | 'late' | 'idle' | 'review' | 'waiting' | 'ontrack';
 export const HEALTH_GROUPS: { id: HealthGroup; label: string; one: string; tone: Tone; members: Health[] }[] = [
   { id: 'blocked', label: 'Con impedimento', one: 'Con impedimento', tone: 'danger', members: ['blocked'] },
   { id: 'late', label: 'Atrasados', one: 'Atrasado', tone: 'warn', members: ['late'] },
+  { id: 'idle', label: 'Sin actividad', one: 'Sin actividad', tone: 'idle', members: ['idle'] },
   { id: 'review', label: 'Por evaluar', one: 'Por evaluar', tone: 'info', members: ['review'] },
+  { id: 'waiting', label: 'En espera', one: 'En espera', tone: 'wait', members: ['waiting'] },
   { id: 'ontrack', label: 'Al día', one: 'Al día', tone: 'ok', members: ['active', 'changes'] },
-  { id: 'idle', label: 'Sin actividad', one: 'Sin actividad', tone: 'neutral', members: ['idle'] },
 ];
 export function studentHealth(w: Workspace, s: Student): Health {
   if (s.status === 'paused') return 'paused';
   if (s.status === 'completed') return 'done';
   const open = w.assignments.filter(a => a.studentId === s.id && isOpen(a));
-  if (open.some(a => a.blockedReason && a.status !== 'pending_review')) return 'blocked';
-  if (open.some(a => isLate(a, w))) return 'late';
+  if (open.some(a => a.blockedReason && !isWaiting(a) && a.status !== 'pending_review')) return 'blocked';
+  // Una actividad en espera no cuenta como atrasada: su reloj está detenido.
+  if (open.some(a => !a.blockedReason && isLate(a, w))) return 'late';
   if (open.some(a => a.status === 'pending_review')) return 'review';
+  if (open.some(a => isWaiting(a))) return 'waiting';
   if (open.some(a => a.status === 'changes_requested')) return 'changes';
   return open.length ? 'active' : 'idle';
 }
@@ -143,7 +169,7 @@ export const inGroup = (health: Health, group: HealthGroup) => HEALTH_GROUPS.fin
 
 /** La actividad abierta más urgente del alumno. */
 export function currentAssignment(w: Workspace, studentId: string) {
-  const rank = (a: Assignment) => a.blockedReason ? 0 : isLate(a, w) ? 1 : a.status === 'pending_review' ? 2 : a.status === 'changes_requested' ? 3 : 4;
+  const rank = (a: Assignment) => a.blockedReason && !isWaiting(a) ? 0 : isLate(a, w) && !a.blockedReason ? 1 : a.status === 'pending_review' ? 2 : a.status === 'changes_requested' ? 3 : isWaiting(a) ? 5 : 4;
   return w.assignments.filter(a => a.studentId === studentId && isOpen(a)).sort((a, b) => rank(a) - rank(b) || (a.dueAt ?? '9').localeCompare(b.dueAt ?? '9'))[0];
 }
 
@@ -159,21 +185,24 @@ export const TASK_GROUPS: { kind: TaskKind; label: string; action: string; tone:
 /** Lo que espera una acción del responsable. Las revisiones de hoy viven en la agenda del día, no aquí. */
 export function pendingTasks(w: Workspace): Task[] {
   const tasks: Task[] = [];
-  for (const a of w.assignments.filter(isOpen)) {
+  // Lo de alumnos en pausa (globalmente o en esta área) no pide nada mientras dure.
+  const resting = new Set(w.students.filter(s => s.status !== 'active').map(s => s.id));
+  for (const a of w.assignments.filter(a => isOpen(a) && !resting.has(a.studentId))) {
     const deliveries = w.deliveries.filter(d => d.assignmentId === a.id);
     if (a.status === 'pending_review') {
       const last = deliveries.filter(d => d.completeness === 'complete').sort((x, y) => y.receivedAt.localeCompare(x.receivedAt))[0];
       tasks.push({ key: `evaluate-${a.id}`, kind: 'evaluate', studentId: a.studentId, assignment: a, date: last?.receivedAt ?? a.updatedAt });
     } else if (a.blockedReason) {
       // Misma prioridad que assignmentState y studentHealth: un impedimento explica el retraso.
-      tasks.push({ key: `blocked-${a.id}`, kind: 'blocked', studentId: a.studentId, assignment: a, date: a.updatedAt });
+      // En espera no es pendiente; vuelve el día que se fijó para revisarlo.
+      if (!isWaiting(a)) tasks.push({ key: `blocked-${a.id}`, kind: 'blocked', studentId: a.studentId, assignment: a, date: a.blockedReviewAt ? `${a.blockedReviewAt}T00:00:00Z` : a.blockedSince ?? a.updatedAt });
     } else if (isLate(a, w)) {
       const confirmed = deliveries.some(d => d.completeness === 'not_submitted');
       tasks.push({ key: `late-${a.id}`, kind: confirmed ? 'no_delivery' : 'overdue', studentId: a.studentId, assignment: a, date: a.dueAt! });
     }
   }
   const start = startOfToday();
-  for (const r of w.reviews.filter(r => r.status === 'scheduled' && Date.parse(r.startsAt) < start)) {
+  for (const r of w.reviews.filter(r => r.status === 'scheduled' && Date.parse(r.startsAt) < start && !resting.has(r.studentId))) {
     tasks.push({ key: `review-${r.id}`, kind: 'unrecorded', studentId: r.studentId, review: r, assignment: w.assignments.find(a => a.id === r.assignmentId), date: r.startsAt });
   }
   return tasks.sort((a, b) => a.date.localeCompare(b.date));
@@ -197,7 +226,7 @@ export function followUp(w: Workspace, s: Student) {
   return { next, last, days, stale: s.status === 'active' && !next && days >= STALE_DAYS };
 }
 /** Alumnos con trabajo pero sin cita próxima y sin contacto reciente. Los que no tienen actividad ya cuentan como «sin actividad». */
-export const staleStudents = (w: Workspace) => w.students.filter(s => s.status === 'active' && studentHealth(w, s) !== 'idle' && followUp(w, s).stale);
+export const staleStudents = (w: Workspace) => w.students.filter(s => s.status === 'active' && !['idle', 'waiting'].includes(studentHealth(w, s)) && followUp(w, s).stale);
 
 /** Horas reconocidas en revisiones realizadas y entregas. */
 export function hoursDone(w: Workspace, studentId: string) {
@@ -348,3 +377,4 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
 }
 export const post = <T,>(path: string, body: unknown) => api<T>(path, { method: 'POST', body: JSON.stringify(body) });
 export const patch = <T,>(path: string, body: unknown) => api<T>(path, { method: 'PATCH', body: JSON.stringify(body) });
+export const del = <T,>(path: string) => api<T>(path, { method: 'DELETE', body: '{}' });

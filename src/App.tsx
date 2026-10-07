@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Dropdown from '@radix-ui/react-dropdown-menu';
-import { House, SquaresFour, CalendarBlank, UsersThree, ListChecks, ChartBar, GearSix, Sparkle, MagnifyingGlass, Plus, SignOut, CaretUpDown, List, X, WarningCircle, Check, Eye } from '@phosphor-icons/react';
+import { House, Kanban, Sun, Moon, SquaresFour, CalendarBlank, UsersThree, ListChecks, ChartBar, GearSix, Sparkle, MagnifyingGlass, Plus, SignOut, CaretUpDown, List, X, WarningCircle, Check, Eye } from '@phosphor-icons/react';
 import type { Session, Workspace, Role } from '../shared/types';
 import { AREAS } from '../shared/types';
 import { api, post, setCsrf, todoCount, scoped, reviewsOn, meetingsOn, today } from './lib';
@@ -9,6 +9,7 @@ import { useIndicator } from './motion';
 import { Avatar, Brand, Button, CreateMenu, Loading, Toast, Empty, AreaIcon, IconButton, areaName } from './components/ui';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
+import Board from './pages/Board';
 import Agenda from './pages/Agenda';
 import Students from './pages/Students';
 import Assignments from './pages/Assignments';
@@ -19,9 +20,10 @@ import Forms from './components/Forms';
 import StudentDrawer from './components/StudentDrawer';
 import AssignmentDrawer from './components/AssignmentDrawer';
 import CommandPalette from './components/CommandPalette';
+import Ambient from './components/Ambient';
 
-const PAGES: Page[] = ['today', 'agenda', 'students', 'assignments', 'talent', 'reports', 'settings'];
-const TITLES: Record<Page, string> = { today: 'Hoy', agenda: 'Agenda', students: 'Alumnos', assignments: 'Actividades', talent: 'Talento', reports: 'Reportes', settings: 'Configuración' };
+const PAGES: Page[] = ['today', 'board', 'agenda', 'students', 'assignments', 'talent', 'reports', 'settings'];
+const TITLES: Record<Page, string> = { today: 'Hoy', board: 'Tablero', agenda: 'Agenda', students: 'Alumnos', assignments: 'Actividades', talent: 'Talento', reports: 'Reportes', settings: 'Configuración' };
 function readRoute() {
   const raw = location.hash.slice(1);
   const [path, query = ''] = raw.split('?');
@@ -29,10 +31,22 @@ function readRoute() {
   return { page, params: new URLSearchParams(query), key: raw || 'today' };
 }
 
+type Theme = 'light' | 'dark';
+/** Tema elegido por la persona; sin elección, el del sistema. Se guarda en este navegador. */
+function useTheme(): [Theme, (t: Theme) => void] {
+  const [theme, setTheme] = useState<Theme>(() => (document.documentElement.dataset.theme as Theme) || 'dark');
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'light' ? '#eef0f4' : '#000000');
+  }, [theme]);
+  return [theme, t => { try { localStorage.setItem('sag-theme', t); } catch { /* sin almacenamiento: dura la sesión */ } setTheme(t); }];
+}
+
 export default function App() {
   const [session, setSession] = useState<Session | null>(null); const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [route, setRoute] = useState(readRoute); const [loadError, setLoadError] = useState('');
   const [mobileNav, setMobileNav] = useState(false); const [modal, setModal] = useState<ModalState>(null);
+  const [theme, setTheme] = useTheme();
   const [studentId, setStudentId] = useState<string | null>(null); const [assignmentId, setAssignmentId] = useState<string | null>(null);
   const [message, setMessage] = useState<{ text: string; kind: 'success' | 'error'; leaving?: boolean; id: number } | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -87,6 +101,7 @@ export default function App() {
   const todayCount = mine ? reviewsOn(mine, today()).filter(r => r.status === 'scheduled').length + meetingsOn(mine, today()).length : 0;
   const nav: { id: Page; label: string; icon: typeof House; count?: number; urgent?: boolean }[] = [
     { id: 'today', label: readonly ? 'Panorama' : 'Hoy', icon: readonly ? SquaresFour : House, count: taskCount || undefined, urgent: true },
+    { id: 'board', label: 'Tablero', icon: Kanban },
     { id: 'agenda', label: 'Agenda', icon: CalendarBlank, count: todayCount || undefined },
     { id: 'students', label: 'Alumnos', icon: UsersThree },
     { id: 'assignments', label: 'Actividades', icon: ListChecks },
@@ -96,6 +111,7 @@ export default function App() {
   const roleLabel = readonly ? 'Jefe · solo lectura' : `Responsable de ${areaName(user.areaId!)}`;
 
   return <div className="shell">
+    <Ambient />
     <a href="#main" className="skip-link" onClick={event => { event.preventDefault(); document.getElementById('main')?.focus(); }}>Saltar al contenido</a>
     {mobileNav && <button className="sidebar-backdrop" aria-label="Cerrar menú" onClick={() => setMobileNav(false)} />}
     <aside className={`sidebar ${mobileNav ? 'sidebar-open' : ''}`} aria-label="Barra lateral">
@@ -117,6 +133,10 @@ export default function App() {
       </nav>
       <div className="sidebar-bottom">
         {session.demo && <p className="demo-flag">Datos de ejemplo</p>}
+        <div className="theme-switch" role="radiogroup" aria-label="Tema">
+          <button type="button" role="radio" aria-checked={theme === 'light'} onClick={() => setTheme('light')}><Sun size={15} weight={theme === 'light' ? 'fill' : 'regular'} aria-hidden="true" />Claro</button>
+          <button type="button" role="radio" aria-checked={theme === 'dark'} onClick={() => setTheme('dark')}><Moon size={15} weight={theme === 'dark' ? 'fill' : 'regular'} aria-hidden="true" />Oscuro</button>
+        </div>
         <Dropdown.Root modal={false}>
           <Dropdown.Trigger asChild>
             <button type="button" className="account" aria-label={`Cuenta: ${user.name}`}>
@@ -130,6 +150,7 @@ export default function App() {
               <div className="menu-header"><strong>{user.name}</strong><span>{user.email}</span><span>{roleLabel}</span></div>
               <Dropdown.Separator className="menu-separator" />
               <Dropdown.Item className="menu-item" onSelect={() => navigate('settings')}><GearSix size={16} />Configuración</Dropdown.Item>
+              <Dropdown.Item className="menu-item" onSelect={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}{theme === 'dark' ? 'Cambiar a tema claro' : 'Cambiar a tema oscuro'}</Dropdown.Item>
               {session.demo && <>
                 <Dropdown.Separator className="menu-separator" />
                 <Dropdown.Label className="menu-label">Ver la demostración como</Dropdown.Label>
@@ -152,6 +173,7 @@ export default function App() {
         {workspace ? <AppContext.Provider value={{ workspace, refresh, toast, navigate, params: route.params, openStudent, openAssignment, modal: setModal, readonly, demo: session.demo, fresh, markFresh }}>
           <div key={route.key} className="page">
             {route.page === 'today' && <Dashboard />}
+            {route.page === 'board' && <Board />}
             {route.page === 'agenda' && <Agenda />}
             {route.page === 'students' && <Students />}
             {route.page === 'assignments' && <Assignments />}

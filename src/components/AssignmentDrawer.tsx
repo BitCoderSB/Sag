@@ -1,8 +1,9 @@
 import { useRef, useState, type ReactNode } from 'react';
-import { ArrowRight, TrendUp, CalendarPlus, ClipboardText, DownloadSimple, Exam, File, LinkSimple, PencilSimple, UploadSimple, X, XCircle, WarningCircle, CheckCircle, Clock, Prohibit } from '@phosphor-icons/react';
+import { ArrowCounterClockwise, ArrowRight, Barricade, Hourglass, Check, TrendUp, CalendarPlus, ClipboardText, DownloadSimple, Exam, File, LinkSimple, PencilSimple, UploadSimple, X, XCircle, WarningCircle, CheckCircle, Clock, Prohibit } from '@phosphor-icons/react';
 import { useApp } from '../context';
-import { activitySteps, assignmentProgress, scoreLevel, api, assignmentState, cleanDetail, dueText, fileSize, formatDate, formatTime, isLate, isOpen, relativeDay, safeUrl, patch, linkLabel, MAX_FILE, FILE_TYPES, toHttpUrl } from '../lib';
-import { AreaTag, Avatar, Badge, Button, Drawer, Empty, ErrorMessage, ExternalLink, IconButton, Menu, Meter, Segmented, Steps, Tabs } from './ui';
+import { blockedSince, blockEscalated, isWaiting, assignmentProgress, scoreLevel, api, cleanDetail, dateKey, dayLabel, dueText, fileSize, formatDate, formatTime, isLate, isOpen, relativeDay, safeUrl, patch, linkLabel, MAX_FILE, FILE_TYPES, toHttpUrl } from '../lib';
+import { AreaTag, Avatar, Badge, Button, Drawer, Empty, ErrorMessage, ExternalLink, IconButton, Menu, Meter, Tabs } from './ui';
+import type { Tone } from '../lib';
 import ReviewCard from './ReviewCard';
 
 type Tab = 'detail' | 'deliveries' | 'evaluations' | 'history';
@@ -12,7 +13,7 @@ export default function AssignmentDrawer({ id, onClose }: { id: string; onClose:
   const assignment = w.assignments.find(a => a.id === id);
   const [tab, setTab] = useState<Tab>('detail');
   const [fileKind, setFileKind] = useState<'instruction' | 'evidence'>('instruction'); const [newLink, setNewLink] = useState(''); const [busy, setBusy] = useState(false); const [error, setError] = useState('');
-  const lock = useRef(false); const fileInput = useRef<HTMLInputElement>(null);
+  const [linkOpen, setLinkOpen] = useState(false); const lock = useRef(false); const fileInput = useRef<HTMLInputElement>(null);
   if (!assignment) return <Drawer label="Actividad no disponible" onClose={onClose}><div className="drawer-body"><Empty title="No encontramos la actividad" description="Puede que ya no tengas acceso. Cierra el panel e inténtalo de nuevo." /></div></Drawer>;
   const student = w.students.find(s => s.id === assignment.studentId);
   const editable = !readonly && assignment.areaId === w.user.areaId; const active = isOpen(assignment);
@@ -24,23 +25,46 @@ export default function AssignmentDrawer({ id, onClose }: { id: string; onClose:
   const attachments = w.attachments.filter(a => a.assignmentId === id);
   const reviews = w.reviews.filter(r => r.assignmentId === id).sort((a, b) => a.startsAt.localeCompare(b.startsAt));
   const history = w.audit.filter(a => a.entityId === id || reviews.some(r => r.id === a.entityId)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  const state = assignmentState(assignment, w);
-  const steps = activitySteps(assignment, w);
   const late = isLate(assignment, w);
   const tabs: { id: Tab; label: string; count?: number }[] = [{ id: 'detail', label: 'Detalle' }, { id: 'deliveries', label: 'Entregas', count: deliveries.length }, { id: 'evaluations', label: 'Evaluaciones', count: evaluations.length }, { id: 'history', label: 'Historial' }];
   const deliver = () => modal({ type: 'progress', assignment });
   const evaluate = () => modal({ type: 'evaluate', assignment });
   const edit = () => modal({ type: 'assignmentEdit', assignment, mode: 'edit' });
+  const block = (mode: 'mark' | 'wait' | 'resolve') => modal({ type: 'block', assignment, mode });
 
-  // Siguiente paso: qué falta y el botón exacto para hacerlo.
-  let next: { tone: string; icon: ReactNode; text: string; action?: ReactNode } | null = null;
-  if (assignment.status === 'cancelled') next = { tone: 'neutral', icon: <Prohibit size={18} />, text: 'Actividad cancelada. Su historial se conserva.' };
-  else if (assignment.status === 'completed') next = { tone: 'ok', icon: <CheckCircle size={18} weight="fill" />, text: currentEval ? `Terminada. La evaluó ${currentEval.evaluatorName} ${relativeDay(currentEval.createdAt)}.` : 'Terminada.', action: <Button size="sm" variant="secondary" onClick={() => setTab('evaluations')}>Ver evaluación</Button> };
-  else if (assignment.status === 'pending_review') next = { tone: 'info', icon: <Exam size={18} weight="fill" />, text: `Entregó ${complete ? relativeDay(complete.receivedAt) : ''}. Falta evaluarla.`, action: editable && <Button size="sm" onClick={evaluate}>Evaluar actividad</Button> };
-  else if (late && noDelivery) next = { tone: 'warn', icon: <WarningCircle size={18} weight="fill" />, text: 'No entregó. Amplía la fecha de entrega o cancela la actividad.', action: editable && <Button size="sm" variant="secondary" onClick={edit}>Cambiar fecha</Button> };
-  else if (late) next = { tone: 'warn', icon: <WarningCircle size={18} weight="fill" />, text: `${dueText(assignment)} y no hay entrega registrada. Confirma con el alumno.`, action: editable && <Button size="sm" onClick={deliver}><TrendUp size={14} weight="bold" />Registrar entrega</Button> };
-  else if (assignment.status === 'changes_requested') next = { tone: 'neutral', icon: <Clock size={18} />, text: 'Está corrigiendo. Registra la nueva entrega cuando la presente.', action: editable && <Button size="sm" onClick={deliver}><TrendUp size={14} weight="bold" />Registrar entrega</Button> };
-  else { const p = assignmentProgress(assignment, w); next = { tone: 'neutral', icon: <Clock size={18} />, text: `El alumno está trabajando${p !== null ? `, lleva ${p} %` : ''}. ${dueText(assignment)}.`, action: editable && <Button size="sm" onClick={deliver}><TrendUp size={14} weight="bold" />Registrar avance</Button> }; }
+  const progress = assignmentProgress(assignment, w);
+  const nextReview = reviews.find(r => r.status === 'scheduled' && Date.parse(r.startsAt) >= Date.now());
+  const lastProgress = deliveries.find(d => d.completeness === 'partial');
+  const due = assignment.dueAt ? Date.parse(assignment.dueAt) : null;
+  const dueSoon = due !== null && active && !complete && !late && due - Date.now() < 2 * 86_400_000;
+  const reschedule = () => modal({ type: 'review', studentId: assignment.studentId, assignmentId: id });
+
+  // Situación: un solo bloque dice qué pasa y qué hacer, en este orden de prioridad.
+  // El impedimento va antes que el atraso porque lo explica; el atraso se menciona como dato adicional.
+  type Situation = { tone: Tone; icon: ReactNode; title: string; text: string; extra?: string; primary?: ReactNode; secondary?: ReactNode };
+  let s: Situation;
+  if (assignment.status === 'cancelled') s = { tone: 'neutral', icon: <Prohibit size={20} weight="bold" />, title: 'Actividad cancelada', text: 'No acepta entregas ni evaluaciones. Su historial se conserva.' };
+  else if (assignment.status === 'completed') s = { tone: 'ok', icon: <CheckCircle size={20} weight="fill" />, title: 'Terminada', text: currentEval ? `La evaluó ${currentEval.evaluatorName} ${relativeDay(currentEval.createdAt)}.` : 'Entrega registrada y evaluada.', secondary: <Button size="sm" variant="secondary" onClick={() => setTab('evaluations')}>Ver evaluación</Button> };
+  // En espera: gris, sin alarma, con la fecha en que vuelve. Llegada esa fecha pide decisión (ámbar) y, si se ignora, sube a rojo.
+  else if (assignment.blockedReason && isWaiting(assignment)) s = { tone: 'wait', icon: <Hourglass size={20} weight="bold" />, title: `En espera hasta el ${formatDate(`${assignment.blockedReviewAt}T12:00:00-06:00`, { weekday: 'short' })}`, text: assignment.blockedReason, extra: undefined, primary: editable && <Button size="sm" onClick={() => block('resolve')}>Ya se resolvió</Button>, secondary: editable && <Button size="sm" variant="secondary" onClick={() => block('wait')}>Cambiar fecha de revisión</Button> };
+  else if (assignment.blockedReason) s = { tone: blockEscalated(assignment) ? 'danger' : 'warn', icon: <Barricade size={20} weight="bold" />, title: blockEscalated(assignment) ? `Impedimento sin revisar ${blockedSince(assignment)}` : 'Revisa el impedimento', text: assignment.blockedReason, extra: late ? `Además, ${dueText(assignment).toLowerCase()} sin entrega registrada.` : undefined, primary: editable && <Button size="sm" onClick={() => block('resolve')}>Resolver</Button>, secondary: editable && <Button size="sm" variant="secondary" onClick={() => block('wait')}>Esperar más</Button> };
+  else if (assignment.status === 'pending_review') s = { tone: 'info', icon: <Exam size={20} weight="bold" />, title: 'Lista para evaluar', text: `Registraste la entrega final ${complete ? relativeDay(complete.receivedAt) : ''}.`, primary: editable && <Button size="sm" onClick={evaluate}>Evaluar</Button> };
+  else if (late && noDelivery) s = { tone: 'warn', icon: <WarningCircle size={20} weight="fill" />, title: 'No entregó', text: 'Registraste que no entregó a tiempo. Amplía la fecha o cancela la actividad.', primary: editable && <Button size="sm" onClick={edit}>Cambiar fecha</Button> };
+  else if (late) s = { tone: 'warn', icon: <WarningCircle size={20} weight="fill" />, title: 'Entrega vencida', text: `${dueText(assignment)} y no has registrado la entrega.`, primary: editable && <Button size="sm" onClick={deliver}>Registrar entrega</Button>, secondary: editable && <Button size="sm" variant="secondary" onClick={edit}>Cambiar fecha</Button> };
+  else if (assignment.status === 'changes_requested') s = { tone: 'neutral', icon: <ArrowCounterClockwise size={20} weight="bold" />, title: 'En correcciones', text: `Pediste correcciones${currentEval ? ` ${relativeDay(currentEval.createdAt)}` : ''}. Registra la nueva entrega cuando la presente.`, primary: editable && <Button size="sm" onClick={deliver}>Registrar entrega</Button> };
+  else s = { tone: 'neutral', icon: <Clock size={20} weight="bold" />, title: 'En curso', text: `${progress !== null ? `Lleva ${progress} %. ` : 'Sin avances registrados. '}${dueText(assignment)}.`, primary: editable && <Button size="sm" onClick={deliver}>Registrar avance</Button>, secondary: editable && <Button size="sm" variant="secondary" onClick={() => block('mark')}><Barricade size={15} />Marcar impedimento</Button> };
+
+  // Seguimiento: solo progreso (hecho, en curso, pendiente) y su fecha. Los problemas los dice la situación, no los pasos.
+  const track: { label: string; sub: string; state: 'done' | 'current' | 'todo' }[] = [
+    { label: 'Asignada', sub: formatDate(assignment.createdAt), state: 'done' },
+    { label: 'Entrega', sub: complete ? `Registrada ${formatDate(complete.receivedAt)}` : lastProgress ? `Avance ${lastProgress.progress ?? ''}${lastProgress.progress != null ? ' %' : ''}`.trim() : noDelivery ? 'No entregó' : 'Sin registrar', state: complete ? 'done' : assignment.status === 'cancelled' ? 'todo' : 'current' },
+    { label: 'Evaluación', sub: assignment.status === 'completed' ? formatDate(currentEval?.createdAt ?? assignment.updatedAt) : assignment.status === 'changes_requested' ? 'Correcciones' : 'Pendiente', state: assignment.status === 'completed' ? 'done' : complete || assignment.status === 'changes_requested' ? 'current' : 'todo' },
+  ];
+  if (assignment.status === 'changes_requested') {
+    const resubmitted = !!(complete && currentEval && complete.receivedAt > currentEval.createdAt);
+    track[1] = { label: 'Entrega', sub: resubmitted ? `Registrada ${formatDate(complete!.receivedAt)}` : 'Nueva entrega pendiente', state: resubmitted ? 'done' : 'current' };
+    track[2] = { label: 'Evaluación', sub: 'Correcciones pedidas', state: resubmitted ? 'current' : 'todo' };
+  }
 
   // Varios documentos a la vez: se suben uno por uno y se informa cuáles fallaron.
   async function upload(list: FileList | null) {
@@ -74,62 +98,77 @@ export default function AssignmentDrawer({ id, onClose }: { id: string; onClose:
   }
   const menuItems = editable ? [
     ...(active ? [{ label: 'Editar actividad', icon: <PencilSimple size={16} />, onSelect: edit }] : []),
+    ...(active && assignment.status !== 'pending_review' ? [assignment.blockedReason ? { label: 'Resolver impedimento', icon: <Barricade size={16} />, onSelect: () => block('resolve') } : { label: 'Marcar impedimento', icon: <Barricade size={16} />, onSelect: () => block('mark') }] : []),
     ...(assignment.status !== 'cancelled' && student?.status === 'active' ? [{ label: 'Programar revisión', icon: <CalendarPlus size={16} />, onSelect: () => modal({ type: 'review', studentId: assignment.studentId, assignmentId: id }) }] : []),
     ...(complete && assignment.status !== 'cancelled' && assignment.status !== 'pending_review' ? [{ label: 'Nueva evaluación', icon: <Exam size={16} />, onSelect: evaluate }] : []),
     ...(active ? ['separator' as const, { label: 'Cancelar actividad', icon: <XCircle size={16} />, danger: true, onSelect: () => modal({ type: 'assignmentEdit', assignment, mode: 'cancel' }) }] : []),
   ] : [];
 
   return <Drawer label={assignment.title} onClose={onClose}>
-    <header className="drawer-head assignment-profile-head">
-      <div className="drawer-head-text">
-        <div className="tag-row"><Badge tone={state.tone} dot>{state.label}</Badge>{readonly && <AreaTag id={assignment.areaId} />}</div>
-        <h2>{assignment.title}</h2>
-        <button type="button" className="person-link" onClick={() => openStudent(assignment.studentId)}><Avatar name={student?.name ?? 'Alumno'} avatar={student?.avatar} size="sm" />{student?.name ?? 'Ver alumno'}<ArrowRight size={13} aria-hidden="true" /></button>
-      </div>
-      {menuItems.length > 0 && <Menu label="Más acciones de la actividad" items={menuItems} />}
+    <header className="ad-head">
+      <p className="ad-eyebrow"><ClipboardText size={14} aria-hidden="true" />Actividad{assignment.phase ? ` · ${assignment.phase}` : ''}{readonly && <AreaTag id={assignment.areaId} compact />}</p>
+      <h2>{assignment.title}</h2>
+      <button type="button" className="ad-person" onClick={() => openStudent(assignment.studentId)}><Avatar name={student?.name ?? 'Alumno'} avatar={student?.avatar} size="sm" /><span>{student?.name ?? 'Alumno'}</span><small>Ver expediente</small><ArrowRight size={13} aria-hidden="true" /></button>
+      {menuItems.length > 0 && <div className="ad-menu"><Menu label="Más acciones de la actividad" items={menuItems} /></div>}
     </header>
-    <div className="drawer-steps"><Steps steps={steps.steps} label={steps.label} size="lg" /></div>
-    {next && <div key={`${assignment.status}-${next.text}`} className={`next-step tone-${next.tone}`}>{next.icon}<p>{next.text}</p>{next.action}</div>}
+
+    <section key={`${assignment.status}-${s.title}`} className={`ad-situation tone-${s.tone}`} aria-label="Situación">
+      <span className="ad-situation-icon" aria-hidden="true">{s.icon}</span>
+      <div className="ad-situation-text">
+        <h3>{s.title}</h3>
+        <p>{s.text}</p>
+        {s.extra && <p className="ad-situation-extra"><WarningCircle size={14} weight="fill" aria-hidden="true" />{s.extra}</p>}
+      </div>
+      {(s.primary || s.secondary) && <div className="ad-situation-actions">{s.primary}{s.secondary}</div>}
+    </section>
+
+    <ol className="ad-track" aria-label="Seguimiento de la actividad">{track.map(t => <li key={t.label} className={`is-${t.state}`}>
+      <span className="ad-track-mark" aria-hidden="true">{t.state === 'done' ? <Check size={11} weight="bold" /> : null}</span>
+      <span className="ad-track-text"><strong>{t.label}</strong><small>{t.sub}</small></span>
+      <span className="sr-only">{t.state === 'done' ? 'hecho' : t.state === 'current' ? 'en curso' : 'pendiente'}</span>
+    </li>)}</ol>
+
     <Tabs value={tab} onChange={setTab} tabs={tabs} label="Secciones de la actividad" idPrefix="assignment-tab" panelId="assignment-panel" />
     <div key={tab} className="drawer-body tab-panel" role="tabpanel" id="assignment-panel" aria-labelledby={`assignment-tab-${tab}`}>
       <ErrorMessage message={error} />
       {tab === 'detail' && <>
-        {assignment.blockedReason && active && <div className="next-step tone-danger"><WarningCircle size={18} weight="fill" /><p><strong>Impedimento:</strong> {assignment.blockedReason}</p>{editable && <Button size="sm" variant="secondary" onClick={edit}>Actualizar</Button>}</div>}
-        <dl className="facts facts-inline">
-          <dt>Fecha límite</dt><dd>{assignment.dueAt ? `${formatDate(assignment.dueAt, { weekday: 'short', year: 'numeric' })}, ${formatTime(assignment.dueAt)}` : 'Sin fecha'}</dd>
-          <dt>Asignada</dt><dd>{formatDate(assignment.createdAt, { year: 'numeric' })}</dd>
+        <dl className="ad-facts">
+          <div className={late || dueSoon ? 'tone-warn' : ''}><dt>Fecha límite</dt><dd><strong>{assignment.dueAt ? `${formatDate(assignment.dueAt, { weekday: 'short' })}, ${formatTime(assignment.dueAt)}` : 'Sin fecha'}</strong>{assignment.dueAt && active && <small>{complete ? 'Entrega ya registrada' : isWaiting(assignment) ? 'Reloj detenido mientras espera' : dueText(assignment)}</small>}</dd></div>
+          <div><dt>Próxima revisión</dt><dd>{nextReview ? <><strong>{dayLabel(nextReview.startsAt)}, {formatTime(nextReview.startsAt)}</strong><small>{nextReview.durationMinutes} min</small></> : <><strong className="muted">Sin programar</strong>{editable && active && <button type="button" className="ad-inline-link" onClick={reschedule}>Programar</button>}</>}</dd></div>
+          <div><dt>Avance</dt><dd>{progress !== null ? <><strong>{progress} %</strong><span className={`ad-meter ${progress >= 100 ? 'is-full' : ''}`}><i style={{ width: `${progress}%` }} /></span></> : <strong className="muted">Sin registrar</strong>}</dd></div>
+          <div><dt>Asignada</dt><dd><strong>{formatDate(assignment.createdAt, { year: 'numeric' })}</strong>{assignment.startAt && dateKey(assignment.startAt) !== dateKey(assignment.createdAt) && <small>Inicio {formatDate(assignment.startAt)}</small>}</dd></div>
         </dl>
-        <section className="drawer-section">
-          <h3>Qué debe hacer y entregar</h3>
+        <section className="ad-section">
+          <h3 className="ad-section-head">Qué debe hacer y entregar</h3>
           <p className="prose">{assignment.description || <span className="muted">Sin instrucciones escritas.</span>}</p>
         </section>
-        <section className="drawer-section">
-          <h3>Habilidades a evaluar</h3>
+        <section className="ad-section">
+          <h3 className="ad-section-head">Habilidades a evaluar<span className="count">{assignment.skillIds.length}</span></h3>
           <span className="tag-row">{assignment.skillIds.map(skillId => <span className="chip" key={skillId}>{w.skills.find(s => s.id === skillId)?.name ?? skillId}</span>)}</span>
         </section>
-        <section className="drawer-section">
-          <h3>Material<span className="count">{assignment.links.length + attachments.length}</span></h3>
-          {(assignment.links.length > 0 || attachments.length > 0) && <ul className="files">
+        <section className="ad-section">
+          <h3 className="ad-section-head">Material<span className="count">{assignment.links.length + attachments.length}</span>
+            {editable && assignment.status !== 'cancelled' && <span className="ad-section-actions">
+              <button type="button" className="ad-inline-link" aria-expanded={linkOpen} onClick={() => setLinkOpen(o => !o)}><LinkSimple size={14} aria-hidden="true" />Añadir enlace</button>
+              <Menu label="Subir documento" align="end" trigger={<button type="button" className="ad-inline-link" disabled={busy}><UploadSimple size={14} aria-hidden="true" />Subir documento</button>} items={[
+                { label: 'Instrucciones (para el alumno)', icon: <File size={16} />, onSelect: () => { setFileKind('instruction'); setTimeout(() => fileInput.current?.click(), 0); } },
+                { label: 'Evidencia (lo que presentó)', icon: <File size={16} />, onSelect: () => { setFileKind('evidence'); setTimeout(() => fileInput.current?.click(), 0); } },
+              ]} />
+            </span>}
+          </h3>
+          <input ref={fileInput} type="file" className="sr-only" tabIndex={-1} aria-label="Elegir archivo" accept={FILE_TYPES} multiple onChange={e => upload(e.target.files)} />
+          {linkOpen && <div className="material-link-add">
+            <LinkSimple size={16} aria-hidden="true" />
+            <input autoFocus type="text" inputMode="url" autoComplete="off" spellCheck={false} aria-label="Pegar enlace" value={newLink} maxLength={2000} onChange={e => setNewLink(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addLink(); } if (e.key === 'Escape') { e.stopPropagation(); setLinkOpen(false); } }} placeholder="Pega un enlace de Drive u otro sitio" />
+            <Button variant="secondary" size="sm" disabled={!newLink.trim()} loading={busy} onClick={addLink}>Añadir</Button>
+          </div>}
+          {(assignment.links.length > 0 || attachments.length > 0) ? <ul className="files">
             {assignment.links.map((l, i) => { const url = safeUrl(l.url); return url && <li key={`l${i}`}><LinkSimple size={16} aria-hidden="true" /><ExternalLink url={url}>{l.label}</ExternalLink>{editable && assignment.status !== 'cancelled' && <IconButton className="file-remove" label={`Quitar ${l.label}`} disabled={busy} onClick={() => saveLinks(assignment.links.filter((_, n) => n !== i), 'Enlace quitado.')}><X size={14} /></IconButton>}</li>; })}
             {attachments.map(a => <li key={a.id}><File size={16} aria-hidden="true" /><a href={`/api/files/${a.id}`} download className="file-link"><span>{a.name}</span><small>{a.kind === 'instruction' ? 'Instrucciones' : 'Evidencia'} · {fileSize(a.size)}</small><DownloadSimple size={15} aria-hidden="true" /></a></li>)}
-          </ul>}
-          {!assignment.links.length && !attachments.length && <p className="drawer-empty">Sin material.</p>}
-          {editable && assignment.status !== 'cancelled' && <div className="material-add">
-            <div className="material-link-add">
-              <LinkSimple size={16} aria-hidden="true" />
-              <input type="text" inputMode="url" autoComplete="off" spellCheck={false} aria-label="Pegar enlace" value={newLink} maxLength={2000} onChange={e => setNewLink(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addLink(); } }} placeholder="Pega un enlace de Drive u otro sitio" />
-              <Button variant="secondary" size="sm" disabled={!newLink.trim()} loading={busy} onClick={addLink}>Añadir</Button>
-            </div>
-            <div className="upload">
-              <Segmented label="Tipo de archivo" value={fileKind} onChange={setFileKind} options={[{ value: 'instruction', label: 'Instrucciones' }, { value: 'evidence', label: 'Evidencia' }]} />
-              <input ref={fileInput} type="file" className="sr-only" tabIndex={-1} aria-label="Elegir archivo" accept={FILE_TYPES} multiple onChange={e => upload(e.target.files)} />
-              <Button variant="secondary" size="sm" loading={busy} onClick={() => fileInput.current?.click()}><UploadSimple size={15} />Subir documentos</Button>
-              <small className="field-hint">PDF, imagen, texto u Office, hasta 10 MB.</small>
-            </div>
-          </div>}
+          </ul> : !linkOpen && <p className="drawer-empty">Sin material. Añade la carpeta de Drive o sube documentos (PDF, imagen, texto u Office, hasta 10 MB).</p>}
         </section>
-        <section className="drawer-section">
-          <h3>Revisiones<span className="count">{reviews.length}</span></h3>
+        <section className="ad-section">
+          <h3 className="ad-section-head">Revisiones<span className="count">{reviews.length}</span>{editable && active && <span className="ad-section-actions"><button type="button" className="ad-inline-link" onClick={reschedule}><CalendarPlus size={14} aria-hidden="true" />Programar</button></span>}</h3>
           {reviews.length ? <div className="stack">{reviews.map(r => <ReviewCard key={r.id} review={r} withDate showStudent={false} showActivity={false} />)}</div> : <p className="drawer-empty">Sin revisiones de esta actividad.</p>}
         </section>
       </>}

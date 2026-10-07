@@ -1,13 +1,14 @@
-import { useRef, useState, type ReactNode } from 'react';
-import { CheckCircle, TrendUp, ClockCounterClockwise, CalendarPlus as CalendarAdd, CaretRight, Exam, HourglassMedium, CalendarX, Barricade, Prohibit, UserPlus, ArrowRight, Plus, CalendarPlus, PencilSimple, FlagPennant, UsersThree } from '@phosphor-icons/react';
-import { AREAS, type AreaId, type AuditEvent, type Meeting, type Review, type Student, type Workspace } from '../../shared/types';
+import { useState, type ReactNode } from 'react';
+import { CheckCircle, CalendarCheck, DotsSixVertical, Hourglass, Pause, Play, UserMinus, WarningCircle, TrendUp, ClockCounterClockwise, CalendarPlus as CalendarAdd, CaretRight, Exam, HourglassMedium, CalendarX, Barricade, Prohibit, UserPlus, ArrowRight, Plus, CalendarPlus, PencilSimple, FlagPennant, UsersThree } from '@phosphor-icons/react';
+import { AREAS, type AreaId, type Assignment, type AuditEvent, type Meeting, type Review, type Student, type Workspace } from '../../shared/types';
 import { useApp } from '../context';
-import { activitySteps, actionsToday, capitalize, currentAssignment, dateKey, dayDiff, dayLabel, assignmentProgress, dueText, firstName, followUp, formatDate, formatTime, HEALTH, HEALTH_GROUPS, inGroup, isLate, isOpen, isPastUnrecorded, meetingsOn, nextReview, upcomingMeetings, normalize, pendingTasks, plural, relativeDay, reviewsOn, reviewTitle, scoped, studentHealth, timeAgo, today, weekDays, type Health, type HealthGroup, type Task, type TaskKind, type Tone } from '../lib';
+import { activitySteps, actionsToday, capitalize, currentAssignment, dateKey, dayDiff, dayLabel, assignmentProgress, dueText, firstName, followUp, formatDate, formatTime, HEALTH, HEALTH_GROUPS, inGroup, isLate, isOpen, isPastUnrecorded, meetingsOn, nextReview, upcomingMeetings, normalize, pendingTasks, plural, relativeDay, blockedSince, blockEscalated, isWaiting, pauseOf, PAUSE_LABELS, reviewLabels, reviewsOn, reviewTitle, STALE_DAYS, scoped, studentHealth, timeAgo, today, weekDays, type Health, type HealthGroup, type Task, type TaskKind, type Tone } from '../lib';
 import { exitRef, reducedMotion, usePresence } from '../motion';
-import { AreaIcon, AreaTag, Avatar, areaName, Badge, Button, Donut, Empty, FilterTabs, CreateMenu, Menu, NextReviewCell, RollingNumber, Search, SectionTitle, Segmented, StatusAvatar, Steps, TextLink } from '../components/ui';
+import { AreaIcon, AreaTag, Avatar, areaName, Badge, Button, Donut, Empty, CreateMenu, Menu, NextReviewCell, RollingNumber, Search, SectionTitle, Segmented, StatusAvatar, Steps, TextLink } from '../components/ui';
 import Calendar from '../components/Calendar';
 import StudentAction from '../components/StudentAction';
 import MeetingCard from '../components/MeetingCard';
+import { beginDrag, type DragItem } from '../components/CalendarDrag';
 
 export default function Dashboard() {
   const { readonly } = useApp();
@@ -15,256 +16,296 @@ export default function Dashboard() {
 }
 
 const todayLabel = () => capitalize(formatDate(new Date(), { weekday: 'long', month: 'long' }));
-type Kind = TaskKind | 'stale' | 'idle';
-const KIND: Record<Kind, { icon: typeof Exam; tone: Tone; label: string; chip: (n: number) => string; action: string }> = {
-  evaluate: { icon: Exam, tone: 'info', label: 'Por evaluar', chip: n => `${n} por evaluar`, action: 'Evaluar' },
-  overdue: { icon: HourglassMedium, tone: 'warn', label: 'Atrasada', chip: n => n === 1 ? '1 atrasada' : `${n} atrasadas`, action: 'Registrar entrega' },
-  unrecorded: { icon: CalendarX, tone: 'warn', label: 'Revisión sin registrar', chip: n => `${n} sin registrar`, action: 'Registrar' },
-  blocked: { icon: Barricade, tone: 'danger', label: 'Con impedimento', chip: n => `${n} con impedimento`, action: 'Ver impedimento' },
-  no_delivery: { icon: Prohibit, tone: 'neutral', label: 'No entregó', chip: n => n === 1 ? '1 no entregó' : `${n} no entregaron`, action: 'Cambiar fecha' },
-  stale: { icon: ClockCounterClockwise, tone: 'warn', label: 'Sin seguimiento', chip: n => `${n} sin seguimiento`, action: 'Programar revisión' },
-  idle: { icon: UserPlus, tone: 'neutral', label: 'Sin actividad', chip: n => `${n} sin actividad`, action: 'Asignar' },
+export type Kind = TaskKind | 'stale' | 'idle' | 'today_review' | 'today_due' | 'resume' | 'next' | 'dropout';
+// Cada pendiente dice la acción que le toca al responsable: él registra revisiones, entregas, calificaciones e impedimentos.
+export const KIND: Record<Kind, { tone: Tone; action: string }> = {
+  blocked: { tone: 'warn', action: 'Resolver' },
+  resume: { tone: 'neutral', action: 'Retomar' },
+  next: { tone: 'neutral', action: 'Asignar siguiente' },
+  dropout: { tone: 'warn', action: 'Pausar participación' },
+  unrecorded: { tone: 'warn', action: 'Registrar revisión' },
+  today_review: { tone: 'neutral', action: 'Registrar revisión' },
+  today_due: { tone: 'neutral', action: 'Registrar entrega' },
+  overdue: { tone: 'warn', action: 'Registrar entrega' },
+  no_delivery: { tone: 'warn', action: 'Cambiar fecha' },
+  evaluate: { tone: 'info', action: 'Evaluar' },
+  stale: { tone: 'warn', action: 'Programar revisión' },
+  idle: { tone: 'idle', action: 'Asignar actividad' },
 };
-const ORDER: Kind[] = ['evaluate', 'overdue', 'unrecorded', 'blocked', 'no_delivery', 'stale', 'idle'];
-const SEVERITY: Health[] = ['blocked', 'late', 'review', 'changes', 'active', 'idle', 'paused', 'done'];
-interface Item { key: string; kind: Kind; studentId: string; task?: Task }
-
-function KindIcon({ kind, size = 'md' }: { kind: Kind; size?: 'md' | 'lg' }) {
-  const meta = KIND[kind]; const Icon = meta.icon;
-  return <span className={`kind-icon kind-icon-${size} tone-${meta.tone}`} aria-hidden="true"><Icon size={size === 'lg' ? 20 : 16} weight="bold" /></span>;
-}
+const TASK_KINDS: TaskKind[] = ['evaluate', 'overdue', 'unrecorded', 'blocked', 'no_delivery'];
+export const TODAY_KINDS: Kind[] = ['today_review', 'today_due'];
+// «Preparar la siguiente» es anticipación, no un pendiente: no suma al número grande.
+export const LATER_KINDS: Kind[] = ['next'];
+const NEXT_DAYS = 3;
+/** Días a partir de los cuales «sin seguimiento» se trata como posible deserción. */
+const DROPOUT_DAYS = 21;
+// Grupos por la acción que piden, en orden de urgencia. La explicación dice qué significa y qué registrar.
+const GROUPS: { id: string; label: string; hint: string; tone: Tone; icon: typeof Exam; kinds: Kind[] }[] = [
+  { id: 'resume', label: '¿Retoman?', hint: 'Llegó la fecha de regreso que pusiste al pausarlos.', tone: 'neutral', icon: Play, kinds: ['resume'] },
+  { id: 'idle', label: 'Sin actividad', hint: 'Un alumno siempre debe tener algo asignado. Dale su siguiente actividad.', tone: 'idle', icon: UserPlus, kinds: ['idle'] },
+  { id: 'blocked', label: 'Revisar impedimentos', hint: 'Llegó la fecha que pusiste para revisarlos. Resuélvelos o sigue esperando.', tone: 'warn', icon: Barricade, kinds: ['blocked'] },
+  { id: 'unrecorded', label: 'Revisiones sin registrar', hint: 'Ya pasaron y no anotaste si se hicieron ni qué se acordó.', tone: 'warn', icon: CalendarX, kinds: ['unrecorded'] },
+  { id: 'today', label: 'Para hoy', hint: 'Revisiones de hoy y entregas que vencen hoy. Regístralas al recibirlas.', tone: 'neutral', icon: CalendarCheck, kinds: ['today_review', 'today_due'] },
+  { id: 'overdue', label: 'Entregas vencidas', hint: 'Pasó la fecha límite y no registraste la entrega. Regístrala o cambia la fecha.', tone: 'warn', icon: HourglassMedium, kinds: ['overdue', 'no_delivery'] },
+  { id: 'evaluate', label: 'Por evaluar', hint: 'Registraste la entrega final; falta evaluar las habilidades.', tone: 'info', icon: Exam, kinds: ['evaluate'] },
+  { id: 'next', label: 'Preparar la siguiente', hint: 'Su única actividad ya se entregó o vence pronto. Ten lista la que sigue para que no se quede sin trabajo.', tone: 'neutral', icon: ArrowRight, kinds: ['next'] },
+  { id: 'stale', label: 'Sin seguimiento', hint: `${STALE_DAYS} días o más sin revisión ni entrega y sin cita próxima.`, tone: 'warn', icon: ClockCounterClockwise, kinds: ['stale'] },
+  { id: 'dropout', label: 'Posible deserción', hint: `Más de ${DROPOUT_DAYS} días sin contacto. Si no responde, pausa su participación para que deje de pedir atención.`, tone: 'warn', icon: UserMinus, kinds: ['dropout'] },
+];
+const SEVERITY: Health[] = ['blocked', 'late', 'idle', 'review', 'waiting', 'changes', 'active', 'paused', 'done'];
+export interface Item { key: string; kind: Kind; studentId: string; review?: Review; assignment?: Assignment; date?: string }
 
 /* ---------- Responsable ---------- */
 
-/** Calendario y alumnos a la izquierda; a la derecha, lo que hay que hacer y el detalle del día elegido. */
+/** Calendario y alumnos a la izquierda; a la derecha, qué te toca registrar ahora, agrupado por acción. */
 function Today({ areaId, switcher }: { areaId?: AreaId; switcher?: ReactNode }) {
   const app = useApp(); const w = scoped(app.workspace, areaId ?? 'all'); const ro = app.readonly;
-  const [selected, setSelected] = useState(today());
-  const dayBlock = useRef<HTMLElement>(null);
+  // Sin día elegido el calendario no abre detalle; «para hoy» del panel abre el día de hoy.
+  const [selected, setSelected] = useState<string | null>(null);
+  // El filtro de la tabla lo comparten la dona y su leyenda: un solo estado.
+  const [filter, setFilter] = useState<RosterFilter>('all');
   const active = w.students.filter(s => s.status === 'active');
   const health = new Map(active.map(s => [s.id, studentHealth(w, s)]));
-  const tasks = pendingTasks(w);
-  const items: Item[] = [
-    ...ORDER.filter(k => k !== 'idle' && k !== 'stale').flatMap(kind => tasks.filter(t => t.kind === kind).map(t => ({ key: t.key, kind, studentId: t.studentId, task: t }))),
-    ...active.filter(s => health.get(s.id) !== 'idle' && followUp(w, s).stale).map(s => ({ key: `stale-${s.id}`, kind: 'stale' as const, studentId: s.id })),
-    ...active.filter(s => health.get(s.id) === 'idle').map(s => ({ key: `idle-${s.id}`, kind: 'idle' as const, studentId: s.id })),
-  ];
-  const featured = items[0];
-  const rest = usePresence(items.slice(1), i => i.key);
-  const agenda = reviewsOn(w, today());
+  const items = buildItems(w, active, health);
+  const pending = items.filter(i => !TODAY_KINDS.includes(i.kind) && !LATER_KINDS.includes(i.kind)).length;
+  const forToday = items.filter(i => TODAY_KINDS.includes(i.kind)).length;
+  const waiting = w.assignments.filter(a => isOpen(a) && isWaiting(a) && active.some(s => s.id === a.studentId));
   const weekReviews = weekDays().reduce((n, d) => n + reviewsOn(w, dateKey(d)).length, 0);
-  const counts = ORDER.map(kind => ({ kind, n: items.filter(i => i.kind === kind).length })).filter(c => c.n);
-  const groups = HEALTH_GROUPS.map(g => ({ ...g, count: active.filter(s => g.members.includes(health.get(s.id)!)).length }));
-  const struggling = active.filter(s => ['blocked', 'late'].includes(health.get(s.id)!)).length;
+  // Requiere atención: impedimento por revisar, atraso o sin actividad. Lo que está en espera no cuenta.
+  const struggling = active.filter(s => ['blocked', 'late', 'idle'].includes(health.get(s.id)!)).length;
   const done = ro ? 0 : actionsToday(app.workspace);
-  // En pantallas angostas el detalle del día queda debajo: al elegir un día se lleva a la vista.
-  function pick(key: string) { setSelected(key); dayBlock.current?.scrollIntoView({ block: 'nearest', behavior: reducedMotion() ? 'auto' : 'smooth' }); }
+  function openToday() { setSelected(today()); requestAnimationFrame(() => document.querySelector('.cal-panel')?.scrollIntoView({ block: 'nearest', behavior: reducedMotion() ? 'auto' : 'smooth' })); }
+  function showStruggling() { setFilter((['blocked', 'late', 'idle'] as const).find(g => active.some(s => health.get(s.id) === g)) ?? 'all'); requestAnimationFrame(() => document.querySelector('.roster')?.scrollIntoView({ block: 'start', behavior: reducedMotion() ? 'auto' : 'smooth' })); }
+  const todayLink = forToday > 0 && <button type="button" className="rail-today-link" onClick={openToday}>{pending ? 'y ' : ''}{forToday} para hoy<CaretRight size={12} weight="bold" aria-hidden="true" /></button>;
 
   return <div className="today">
     <div className="today-main">
       <header className="today-head">
         <div className="today-title">
         <h1>{areaName(areaId ?? w.user.areaId!)}</h1>
-        <p>{plural(active.length, 'alumno', 'alumnos')} · {plural(weekReviews, 'revisión', 'revisiones')} esta semana{struggling > 0 && <> · <span className="text-warn">{struggling === 1 ? '1 requiere atención' : `${struggling} requieren atención`}</span></>}</p>
+        <p>{plural(active.length, 'alumno', 'alumnos')} · {plural(weekReviews, 'revisión', 'revisiones')} esta semana</p>
         </div>
         {switcher}
         {!ro && <CreateMenu align="end" onPick={kind => app.modal({ type: kind })} />}
         {ro && <Button onClick={() => app.modal({ type: 'meeting', areaIds: areaId ? [areaId] : undefined })}><CalendarAdd size={16} weight="bold" />Agendar reunión</Button>}
       </header>
-      <Calendar w={w} selected={selected} onSelect={pick} />
-      <Roster w={w} students={active} health={health} />
+      <Calendar w={w} selected={selected} onSelect={setSelected} detail />
+      <Roster w={w} students={active} health={health} filter={filter} onFilter={setFilter} paused={w.students.filter(s => s.status === 'paused')} />
     </div>
 
-    <aside className="rail" aria-label="Pendientes y día elegido">
-      <section className="rail-block rail-summary" aria-label="Resumen">
-        {items.length ? <div className="rail-figure">
-          <RollingNumber value={items.length} className="rail-number" />
-          <span className="rail-unit">{items.length === 1 ? 'pendiente' : 'pendientes'}<small>{agenda.length ? `y ${plural(agenda.length, 'revisión', 'revisiones')} hoy` : 'Sin revisiones hoy'}</small></span>
+    <aside className="rail" aria-label="Qué registrar hoy">
+      <section className="rail-block rail-summary" aria-label="Resumen de hoy">
+        <p className="rail-date">Hoy · {todayLabel()}</p>
+        {pending ? <div className="rail-figure">
+          <RollingNumber value={pending} className="rail-number" />
+          <span className="rail-unit">{pending === 1 ? 'pendiente' : 'pendientes'}{todayLink || <small>Nada más para hoy</small>}</span>
         </div> : <div className="rail-figure rail-clear">
           <span className="check-draw" aria-hidden="true"><CheckCircle size={44} weight="fill" /></span>
-          <span className="rail-unit">Todo al día<small>{agenda.length ? `Te ${agenda.length === 1 ? 'queda 1 revisión' : `quedan ${agenda.length} revisiones`} hoy` : 'Nada pendiente ni revisiones hoy'}</small></span>
+          <span className="rail-unit">Sin pendientes{todayLink || <small>Nada pendiente para hoy</small>}</span>
         </div>}
-        {counts.length > 0 && <ul className="kind-chips" aria-label="Pendientes por tipo">{counts.map(c => { const Icon = KIND[c.kind].icon; return <li key={c.kind} className={`kind-chip tone-${KIND[c.kind].tone}`}><Icon size={14} weight="bold" aria-hidden="true" />{KIND[c.kind].chip(c.n)}</li>; })}</ul>}
+        {struggling > 0 && <button type="button" className="rail-alert" onClick={showStruggling}><WarningCircle size={15} weight="fill" aria-hidden="true" />{struggling === 1 ? '1 alumno requiere atención' : `${struggling} alumnos requieren atención`}<CaretRight size={12} weight="bold" aria-hidden="true" /></button>}
+        {!ro && done + items.length > 0 && <div className="rail-progress" role="img" aria-label={`Hoy llevas ${done} de ${done + items.length}`}>
+          <span><strong>Hoy llevas {done} de {done + items.length}</strong></span>
+          <i><b style={{ width: `${Math.round(done / (done + items.length) * 100)}%` }} /></i>
+        </div>}
         {!ro && meetingsOn(w, today()).filter(m => Date.parse(m.startsAt) + m.durationMinutes * 60000 > Date.now()).slice(0, 2).map(m => <p key={m.id} className="rail-meeting"><UsersThree size={15} weight="bold" aria-hidden="true" /><span><strong>Reunión hoy a las {formatTime(m.startsAt)}</strong>{m.title}</span></p>)}
-        {done > 0 && <p className="rail-done"><CheckCircle size={14} weight="fill" aria-hidden="true" />Hoy llevas {plural(done, 'registro', 'registros')}</p>}
-        <button type="button" className="rail-health" onClick={() => app.navigate('students', areaId ? { area: areaId } : undefined)} aria-label={`Ver alumnos: ${active.length - struggling} de ${active.length} sin problemas`}>
-          <Donut size={76} stroke={9} label={groups.map(g => `${g.label}: ${g.count}`).join(', ')} segments={groups.map(g => ({ value: g.count, tone: g.id === 'idle' ? 'idle' : g.tone }))}>
-            <strong>{active.length - struggling}</strong><span>de {active.length}</span>
-          </Donut>
-          <span className="rail-health-text">
-            <strong>{struggling === 0 ? (ro ? 'Sus alumnos van bien' : 'Tus alumnos van bien') : struggling === 1 ? '1 alumno necesita atención' : `${struggling} alumnos necesitan atención`}</strong>
-            <span className="legend">{groups.filter(g => g.count).map(g => <span key={g.id}><i className={`legend-dot tone-${g.id === 'idle' ? 'idle' : g.tone}`} />{g.count} {(g.count === 1 ? g.one : g.label).toLowerCase()}</span>)}</span>
-          </span>
-        </button>
       </section>
-
-      {featured && <section className="rail-block" aria-labelledby="tasks-title">
-        <h2 id="tasks-title" className="block-title">Empieza por aquí</h2>
-        <Featured key={featured.key} item={featured} health={health.get(featured.studentId) ?? 'active'} />
-        {rest.length > 0 && <>
-          <h3 className="subhead">Después<span className="count">{items.length - 1}</span></h3>
-          <ul className="task-list">{rest.map(({ item, key, exiting }) => <TaskRow key={key} item={item} exiting={exiting} />)}</ul>
-        </>}
-      </section>}
-
-      <section className="rail-block" ref={dayBlock} aria-labelledby="day-title">
-        <DayPanel w={w} selected={selected} />
-      </section>
+      {items.length > 0 && <TaskGroups items={items} health={health} />}
+      {waiting.length > 0 && <WaitingList w={w} assignments={waiting} />}
     </aside>
   </div>;
 }
 
-function useTaskAction(item: Item) {
+/** Todo lo que el responsable tiene que registrar o decidir: lo atrasado (tareas del sistema) y lo que vence o toca hoy. */
+export function buildItems(w: Workspace, active: Student[], health: Map<string, Health>): Item[] {
+  const tasks = pendingTasks(w);
+  const now = Date.now();
+  const delivered = (id: string) => w.deliveries.some(d => d.assignmentId === id && d.completeness === 'complete');
+  return [
+    ...tasks.filter(t => (TASK_KINDS as string[]).includes(t.kind)).map(t => ({ key: t.key, kind: t.kind as Kind, studentId: t.studentId, review: t.review, assignment: t.assignment, date: t.date })),
+    // Revisiones de hoy (las de días anteriores sin registrar ya son tareas «Por registrar»).
+    ...reviewsOn(w, today()).filter(r => r.status === 'scheduled').map(r => ({ key: `today-review-${r.id}`, kind: 'today_review' as const, studentId: r.studentId, review: r, assignment: w.assignments.find(a => a.id === r.assignmentId), date: r.startsAt })),
+    // Entregas que vencen hoy y todavía no se registran (si la hora ya pasó, aparecen como «Vencidas»).
+    ...w.assignments.filter(a => isOpen(a) && a.status !== 'pending_review' && !a.blockedReason && a.dueAt && dateKey(a.dueAt) === today() && Date.parse(a.dueAt) >= now && !delivered(a.id))
+      .map(a => ({ key: `today-due-${a.id}`, kind: 'today_due' as const, studentId: a.studentId, assignment: a, date: a.dueAt! })),
+    ...active.filter(s => !['idle', 'waiting'].includes(health.get(s.id)!) && followUp(w, s).stale).map(s => ({ key: `stale-${s.id}`, kind: followUp(w, s).days >= DROPOUT_DAYS ? 'dropout' as const : 'stale' as const, studentId: s.id, date: followUp(w, s).last })),
+    // Pausas cuyo regreso ya llegó.
+    ...w.students.filter(s => { const p = pauseOf(s, w.user.areaId); return !!p?.returnAt && p.returnAt <= today(); }).map(s => ({ key: `resume-${s.id}`, kind: 'resume' as const, studentId: s.id, date: pauseOf(s, w.user.areaId)!.returnAt! })),
+    // Su única actividad ya se entregó o vence en pocos días: preparar la siguiente antes de que se quede sin trabajo.
+    ...active.flatMap(s => { const open = w.assignments.filter(a => a.studentId === s.id && isOpen(a)); const a = open[0];
+      if (open.length !== 1 || a.blockedReason || health.get(s.id) === 'late') return [];
+      const soon = a.status === 'pending_review' || (!!a.dueAt && dateKey(a.dueAt) > today() && dayDiff(a.dueAt) <= NEXT_DAYS);
+      return soon ? [{ key: `next-${s.id}`, kind: 'next' as const, studentId: s.id, assignment: a, date: a.dueAt ?? undefined }] : []; }),
+    ...active.filter(s => health.get(s.id) === 'idle').map(s => ({ key: `idle-${s.id}`, kind: 'idle' as const, studentId: s.id })),
+  ];
+}
+
+/** Grupos por la acción que piden, en orden de urgencia, todos a la vista. Cada uno explica qué significa y qué hacer. */
+function TaskGroups({ items, health }: { items: Item[]; health: Map<string, Health> }) {
+  const groups = GROUPS.map(g => ({ ...g, items: items.filter(i => g.kinds.includes(i.kind)).sort((a, b) => (a.date ?? '').localeCompare(b.date ?? '')) })).filter(g => g.items.length);
+  const draggable = !useApp().readonly;
+  return <section className="rail-block task-groups" aria-label="Pendientes por tipo">
+    {draggable && <p className="tg-hint"><DotsSixVertical size={14} weight="bold" aria-hidden="true" />Arrastra cualquier pendiente a un día del calendario para darle fecha.</p>}
+    {groups.map(g => <TaskGroup key={g.id} group={g} health={health} />)}
+  </section>;
+}
+function TaskGroup({ group: g, health }: { group: (typeof GROUPS)[number] & { items: Item[] }; health: Map<string, Health> }) {
+  // Se ven los primeros tres; el resto con «Ver N más», sin acordeón ni flechas.
+  const [all, setAll] = useState(false);
+  const rows = usePresence(all ? g.items : g.items.slice(0, 3), i => i.key);
+  return <div className={`tg tone-${g.tone}`}>
+    <div className="tg-head">
+      <span className="tg-icon" aria-hidden="true"><g.icon size={15} weight="bold" /></span>
+      <h3 className="tg-label">{g.label}</h3>
+      <span className="tg-count" aria-label={plural(g.items.length, 'pendiente', 'pendientes')}>{g.items.length}</span>
+      <p className="tg-desc">{g.hint}</p>
+    </div>
+    <ul className="tg-list">{rows.map(({ item, key, exiting }) => <TaskRow key={key} item={item} exiting={exiting} health={health.get(item.studentId) ?? 'active'} />)}</ul>
+    {g.items.length > 3 && <button type="button" className="tg-more" onClick={() => setAll(v => !v)}>{all ? 'Ver menos' : `Ver ${g.items.length - 3} más`}</button>}
+  </div>;
+}
+
+export function useTaskAction(item: Item) {
   const app = useApp();
-  const a = item.task?.assignment; const r = item.task?.review;
+  const a = item.assignment; const r = item.review;
   return () => {
-    if (item.kind === 'idle') app.modal({ type: 'assignment', studentId: item.studentId });
+    const student = app.workspace.students.find(s => s.id === item.studentId);
+    if (item.kind === 'idle' || item.kind === 'next') app.modal({ type: 'assignment', studentId: item.studentId });
+    else if (item.kind === 'resume' && student) app.modal({ type: 'resume', student });
+    else if (item.kind === 'dropout' && student) app.modal({ type: 'pause', student, kind: 'no_contact' });
     else if (item.kind === 'stale') app.modal({ type: 'review', studentId: item.studentId });
     else if (item.kind === 'evaluate' && a) app.modal({ type: 'evaluate', assignment: a });
-    else if (item.kind === 'overdue' && a) app.modal({ type: 'delivery', assignment: a });
-    else if (item.kind === 'unrecorded' && r) app.modal({ type: 'reviewUpdate', review: r, mode: 'record' });
+    else if ((item.kind === 'overdue' || item.kind === 'today_due') && a) app.modal({ type: 'delivery', assignment: a });
+    else if ((item.kind === 'unrecorded' || item.kind === 'today_review') && r) app.modal({ type: 'reviewUpdate', review: r, mode: 'record', early: Date.parse(r.startsAt) > Date.now() });
+    else if (item.kind === 'blocked' && a) app.modal({ type: 'block', assignment: a, mode: 'resolve' });
     else if (a) app.modal({ type: 'assignmentEdit', assignment: a, mode: 'edit' });
   };
 }
-function itemDetail(item: Item, w: Workspace) {
-  const t = item.task; const a = t?.assignment; const r = t?.review;
+/** Un pendiente que se suelta en un día abre el diálogo que corresponde, con esa fecha ya puesta. */
+function useTaskDrag(item: Item): DragItem | undefined {
+  const app = useApp(); const w = app.workspace;
+  if (app.readonly || item.kind === 'resume' || item.kind === 'dropout') return undefined;
+  const student = w.students.find(s => s.id === item.studentId); const a = item.assignment; const r = item.review;
+  const drop = (day: string) => {
+    if ((item.kind === 'unrecorded' || item.kind === 'today_review') && r) app.modal({ type: 'reviewUpdate', review: r, mode: 'reschedule', date: day });
+    else if (item.kind === 'idle' || item.kind === 'next') app.modal({ type: 'assignment', studentId: item.studentId, dueDate: day });
+    else if (['overdue', 'no_delivery', 'blocked', 'today_due'].includes(item.kind) && a) app.modal({ type: 'assignmentEdit', assignment: a, mode: 'edit', dueDate: day });
+    else app.modal({ type: 'review', studentId: item.studentId, assignmentId: a?.id, date: day });
+  };
+  return { id: item.key, title: a?.title ?? student?.name ?? 'Alumno', person: student?.name ?? 'Alumno', avatar: student?.avatar, drop };
+}
+/** Por qué está en la lista, dicho desde lo que registraste tú. */
+export function itemDetail(item: Item, w: Workspace) {
+  const a = item.assignment; const r = item.review;
   switch (item.kind) {
-    case 'evaluate': return `Entregó ${relativeDay(t!.date)}`;
-    case 'overdue': return `Venció ${relativeDay(t!.date)}`;
+    case 'evaluate': return `Entrega registrada ${relativeDay(item.date!)}`;
+    case 'overdue': return `Venció ${relativeDay(item.date!)}, sin entrega registrada`;
     case 'unrecorded': return r ? `Revisión ${relativeDay(r.startsAt)}, ${formatTime(r.startsAt)}` : '';
-    case 'blocked': return a?.blockedReason ?? '';
-    case 'no_delivery': return 'No entregó. Amplía la fecha o cancela.';
-    case 'stale': { const s = w.students.find(x => x.id === item.studentId); return s ? `Sin revisión ni entrega desde hace ${followUp(w, s).days} días` : ''; }
-    case 'idle': return 'No tiene trabajo abierto en tu área';
+    case 'today_review': return r ? `${Date.parse(r.startsAt) < Date.now() ? 'Fue hoy' : 'Hoy'} a las ${formatTime(r.startsAt)} · ${reviewLabels[r.type]}` : '';
+    case 'today_due': return a?.dueAt ? `Vence hoy a las ${formatTime(a.dueAt)}` : 'Vence hoy';
+    case 'blocked': return a ? `${a.blockedReason} · ${blockedSince(a)}${blockEscalated(a) ? ' · sin revisar' : ''}` : '';
+    case 'resume': { const s = w.students.find(x => x.id === item.studentId); const p = s && pauseOf(s, w.user.areaId); return p ? `${PAUSE_LABELS[p.kind]} · regreso previsto ${relativeDay(`${p.returnAt}T12:00:00-06:00`)}` : ''; }
+    case 'next': return a ? a.status === 'pending_review' ? 'Su actividad ya está entregada' : `Su única actividad vence ${relativeDay(a.dueAt!)}` : '';
+    case 'dropout': { const s = w.students.find(x => x.id === item.studentId); return s ? `${followUp(w, s).days} días sin revisión ni entrega` : ''; }
+    case 'no_delivery': return 'Registraste que no entregó. Amplía la fecha o cancela.';
+    case 'stale': { const s = w.students.find(x => x.id === item.studentId); return s ? `${followUp(w, s).days} días sin revisión ni entrega` : ''; }
+    case 'idle': return 'Sin trabajo abierto en tu área';
   }
 }
 
-function Featured({ item, health }: { item: Item; health: Health }) {
+function TaskRow({ item, exiting, health }: { item: Item; exiting: boolean; health: Health }) {
   const app = useApp(); const w = app.workspace;
   const student = w.students.find(s => s.id === item.studentId);
-  const a = item.task?.assignment;
-  const act = useTaskAction(item); const meta = KIND[item.kind];
-  const steps = a ? activitySteps(a, w) : null; const detail = itemDetail(item, scoped(w));
-  return <article className={`next tone-${meta.tone}`}>
-    <div className="next-top"><KindIcon kind={item.kind} /><span className="next-kind">{meta.label}</span></div>
-    <div className="next-body">
-      <button type="button" className="next-person" onClick={() => app.openStudent(item.studentId)}><StatusAvatar name={student?.name ?? 'Alumno'} avatar={student?.avatar} health={health} size="lg" /></button>
-      <div className="next-text">
-        {a ? <button type="button" className="next-title" onClick={() => app.openAssignment(a.id)}>{a.title}</button> : <span className="next-title">{student?.name}</span>}
-        <button type="button" className="link-muted" onClick={() => app.openStudent(item.studentId)}>{a ? student?.name : 'Abrir expediente'}</button>
-      </div>
-    </div>
-    {detail && <p className="next-when">{detail}</p>}
-    {steps && <Steps steps={steps.steps} label={steps.label} size="lg" />}
-    {!app.readonly && <Button className="next-action" onClick={act}>{meta.action}<ArrowRight size={16} weight="bold" /></Button>}
-  </article>;
-}
-
-function TaskRow({ item, exiting }: { item: Item; exiting: boolean }) {
-  const app = useApp(); const w = app.workspace;
-  const student = w.students.find(s => s.id === item.studentId);
-  const a = item.task?.assignment;
-  const act = useTaskAction(item); const detail = itemDetail(item, scoped(w));
-  return <li className={`task tone-${KIND[item.kind].tone}`} ref={exitRef(exiting)} aria-hidden={exiting || undefined}>
-    <KindIcon kind={item.kind} />
-    <button type="button" className="task-main" tabIndex={exiting ? -1 : undefined} onClick={() => a ? app.openAssignment(a.id) : app.openStudent(item.studentId)}>
-      <span className="task-text"><strong>{student?.name ?? 'Alumno'}</strong><span>{a?.title ?? (item.kind === 'idle' ? 'Sin actividad asignada' : item.kind === 'stale' ? 'Sin cita próxima' : 'Seguimiento general')}</span></span>
+  const a = item.assignment; const r = item.review;
+  const act = useTaskAction(item); const detail = itemDetail(item, scoped(w)); const drag = useTaskDrag(item);
+  const title = item.kind === 'next' ? 'Su siguiente actividad' : a?.title ?? (r ? reviewTitle(r, w) : item.kind === 'idle' ? 'Asignarle una actividad' : item.kind === 'stale' ? 'Programar su siguiente revisión' : item.kind === 'resume' ? '¿Retoma su participación?' : item.kind === 'dropout' ? 'Sin contacto' : 'Seguimiento general');
+  const tone = item.kind === 'blocked' && a && blockEscalated(a) ? 'danger' : KIND[item.kind].tone;
+  // Dos salidas cuando hay que decidir: resolver o seguir esperando; retomar o extender la pausa.
+  const second = app.readonly ? null : item.kind === 'blocked' && a ? <Button size="sm" variant="secondary" className="tg-action" onClick={() => app.modal({ type: 'block', assignment: a, mode: 'wait' })}>Esperar más</Button>
+    : item.kind === 'resume' && student ? <Button size="sm" variant="secondary" className="tg-action" onClick={() => app.modal({ type: 'pause', student })}>Extender</Button> : null;
+  return <li className={`tg-row tone-${tone} ${drag ? 'is-draggable' : ''}`} ref={exitRef(exiting)} aria-hidden={exiting || undefined}
+    onPointerDown={drag && !exiting ? e => { if (!(e.target as HTMLElement).closest('.button, .icon-button, [aria-haspopup]')) beginDrag(drag, e); } : undefined}>
+    <button type="button" className="tg-person" tabIndex={exiting ? -1 : undefined} onClick={() => app.openStudent(item.studentId)} aria-label={`Abrir expediente de ${student?.name ?? 'alumno'}`}><StatusAvatar name={student?.name ?? 'Alumno'} avatar={student?.avatar} health={health} size="sm" /></button>
+    <button type="button" className="tg-main" tabIndex={exiting ? -1 : undefined} onClick={() => a ? app.openAssignment(a.id) : app.openStudent(item.studentId)}>
+      {item.kind === 'no_delivery' && <span className="tg-tag">No entregó</span>}
+      <strong>{title}</strong>
+      <span>{student?.name ?? 'Alumno'}</span>
     </button>
-    <span className={`task-detail ${item.kind === 'blocked' ? 'task-detail-wrap' : ''}`} title={detail}>{detail}</span>
-    {!app.readonly && <Button size="sm" variant="secondary" tabIndex={exiting ? -1 : undefined} onClick={act}>{KIND[item.kind].action}</Button>}
+    {drag && <span className="tg-grip" title="Arrastra a un día del calendario" aria-hidden="true"><DotsSixVertical size={16} weight="bold" /></span>}
+    {detail && <span className={`tg-detail ${item.kind === 'blocked' ? 'is-wrap' : ''}`}>{detail}</span>}
+    {!app.readonly && (second ? <span className="tg-actions"><Button size="sm" className="tg-action" tabIndex={exiting ? -1 : undefined} onClick={act}>{KIND[item.kind].action}</Button>{second}</span>
+      : <Button size="sm" className="tg-action" variant={item.kind === 'next' ? 'secondary' : 'primary'} tabIndex={exiting ? -1 : undefined} onClick={act}>{KIND[item.kind].action}</Button>)}
   </li>;
 }
 
-/** Revisiones, reuniones y entregas del día elegido en el calendario. Hoy lleva la marca de ahora y las próximas. */
-function DayPanel({ w, selected }: { w: Workspace; selected: string }) {
-  const app = useApp();
-  const isToday = selected === today(); const canSchedule = selected >= today() && !app.readonly;
-  const reviews = reviewsOn(w, selected); const meetings = meetingsOn(w, selected);
-  const dues = w.assignments.filter(a => isOpen(a) && a.dueAt && dateKey(a.dueAt) === selected);
-  const next = [
-    ...w.reviews.filter(r => r.status === 'scheduled' && dayDiff(r.startsAt) > 0).map(r => ({ id: r.id, at: r.startsAt, who: w.students.find(s => s.id === r.studentId)?.name ?? 'Alumno', meeting: false, open: () => r.assignmentId ? app.openAssignment(r.assignmentId) : app.openStudent(r.studentId) })),
-    ...upcomingMeetings(w).filter(m => dayDiff(m.startsAt) > 0).map(m => ({ id: m.id, at: m.startsAt, who: m.title, meeting: true, open: () => app.navigate('agenda') })),
-  ].sort((x, y) => x.at.localeCompare(y.at)).slice(0, 4);
-  const date = new Date(`${selected}T12:00:00-06:00`);
-  const timeline = [...reviews.map(r => ({ at: r.startsAt, node: <DayItem key={r.id} review={r} w={w} /> })), ...meetings.map(m => ({ at: m.startsAt, node: <MeetingItem key={m.id} meeting={m} /> }))].sort((x, y) => x.at.localeCompare(y.at));
-  const nowIndex = timeline.findIndex(t => Date.parse(t.at) > Date.now());
-  const entries = timeline.map(t => t.node);
-  if (isToday && timeline.length) entries.splice(nowIndex === -1 ? entries.length : nowIndex, 0, <li className="now-line" key="now"><span>Ahora · {formatTime(new Date().toISOString())}</span></li>);
-  const count = [reviews.length && plural(reviews.length, 'revisión', 'revisiones'), meetings.length && plural(meetings.length, 'reunión', 'reuniones')].filter(Boolean).join(' · ');
-  return <>
-    <div className="block-head day-head">
-      <h2 id="day-title" className="block-title">{isToday ? (app.readonly ? 'Hoy' : 'Tu día') : capitalize(formatDate(date, { weekday: 'short', day: 'numeric', month: 'long' }))}</h2>
-      <span className="day-sub">{count || 'Sin citas'}</span>
-    </div>
-    {timeline.length ? <ol className="day-line">{entries}</ol> : <p className="side-empty">{isToday ? 'Sin revisiones ni reuniones hoy.' : 'Nada agendado este día.'}</p>}
-    {dues.length > 0 && <>
-      <h3 className="subhead"><FlagPennant size={13} weight="fill" aria-hidden="true" />&nbsp;Vencen este día<span className="count">{dues.length}</span></h3>
-      <ul className="due-rows">{dues.map(a => { const st = w.students.find(s => s.id === a.studentId); return <li key={a.id}><button type="button" onClick={() => app.openAssignment(a.id)}>
-        <Avatar name={st?.name ?? 'Alumno'} avatar={st?.avatar} size="sm" /><span><strong>{a.title}</strong><small>{st?.name} · {dueText(a)}</small></span>
-      </button></li>; })}</ul>
-    </>}
-    {canSchedule && <button type="button" className="day-add" onClick={() => app.modal({ type: 'review', date: selected })}><Plus size={15} aria-hidden="true" />Programar revisión en este día</button>}
-    {app.readonly && selected >= today() && <button type="button" className="day-add" onClick={() => app.modal({ type: 'meeting', date: selected, areaIds: w.reviews[0] ? [w.reviews[0].areaId] : undefined })}><Plus size={15} aria-hidden="true" />Agendar reunión este día</button>}
-    {isToday && next.length > 0 && <>
-      <h3 className="subhead">Próximas</h3>
-      <ul className="upcoming">{next.map(n => <li key={n.id}><button type="button" onClick={n.open}>
-        <span className="upcoming-when"><strong>{dayLabel(n.at, true)}</strong>{formatTime(n.at)}</span>
-        <span className={`upcoming-who ${n.meeting ? 'is-meeting' : ''}`}>{n.meeting && <UsersThree size={13} weight="bold" aria-hidden="true" />}{n.who}</span>
-      </button></li>)}</ul>
-    </>}
-    <TextLink onClick={() => app.navigate('agenda', app.readonly ? { area: w.reviews[0]?.areaId ?? '' } : undefined)}>Abrir agenda</TextLink>
-  </>;
-}
-/** Reunión con el jefe dentro de la línea del día: no abre nada; muestra asunto y lugar. */
-function MeetingItem({ meeting }: { meeting: Meeting }) {
-  const app = useApp();
-  const past = Date.parse(meeting.startsAt) + meeting.durationMinutes * 60000 < Date.now();
-  return <li className={`day-item day-meeting ${past ? 'is-done' : ''} ${app.fresh.has(meeting.id) ? 'is-fresh' : ''}`}>
-    <span className="day-time">{formatTime(meeting.startsAt)}</span>
-    <span className="day-dot" aria-hidden="true" />
-    <span className="day-body"><strong>{meeting.title}</strong><span>Reunión{app.readonly ? '' : ` con ${meeting.organizerName}`}{meeting.place ? ` · ${meeting.place}` : ''}</span></span>
-    <span className="meeting-badge"><UsersThree size={13} weight="bold" aria-hidden="true" />{meeting.durationMinutes} min</span>
-  </li>;
-}
-function DayItem({ review, w }: { review: Review; w: Workspace }) {
-  const app = useApp();
-  const student = w.students.find(s => s.id === review.studentId);
-  const past = isPastUnrecorded(review);
-  const state = review.status === 'completed' ? 'is-done' : past ? 'is-due' : review.status === 'missed' ? 'is-done' : '';
-  return <li className={`day-item ${state} ${app.fresh.has(review.id) ? 'is-fresh' : ''}`}>
-    <span className="day-time">{formatTime(review.startsAt)}</span>
-    <span className="day-dot" aria-hidden="true" />
-    <button type="button" className="day-body" onClick={() => review.assignmentId ? app.openAssignment(review.assignmentId) : app.openStudent(review.studentId)}>
-      <strong>{student?.name}</strong><span>{reviewTitle(review, w)}</span>
-    </button>
-    {review.status === 'completed' ? <CheckCircle size={18} weight="fill" className="day-check" aria-label="Realizada" />
-      : review.status === 'missed' ? <Badge>No se realizó</Badge>
-      : past ? app.readonly ? <Badge tone="warn">Sin registrar</Badge> : <Button size="sm" variant="secondary" onClick={() => app.modal({ type: 'reviewUpdate', review, mode: 'record' })}>Registrar</Button>
-      : null}
-  </li>;
+/** Alumnos en pausa: fuera de pendientes y de la dona; aquí se ve el motivo, desde cuándo y cuándo regresan. */
+function PausedList({ students }: { students: Student[] }) {
+  const app = useApp(); const area = app.workspace.user.areaId;
+  return <section className="paused" aria-labelledby="paused-title">
+    <h3 id="paused-title" className="paused-head"><Pause size={14} weight="fill" aria-hidden="true" />En pausa<span className="count">{students.length}</span><small>No cuentan en pendientes ni en la dona.</small></h3>
+    <ul>{students.map(s => { const p = pauseOf(s, area); return <li key={s.id}>
+      <button type="button" className="student-name" onClick={() => app.openStudent(s.id)}><Avatar name={s.name} avatar={s.avatar} /><span><strong>{s.name}</strong><small>{p ? `${PAUSE_LABELS[p.kind]}${p.reason ? ` · ${p.reason}` : ''}` : 'Expediente en pausa'}</small></span></button>
+      <span className="paused-when">{p ? <>Desde {formatDate(p.since)}<small>{p.returnAt ? `Regresa ${formatDate(`${p.returnAt}T12:00:00-06:00`, { weekday: 'short' })}` : 'Sin fecha de regreso'}</small></> : null}</span>
+      {!app.readonly && p && <span className="row-actions"><Button size="sm" variant="secondary" onClick={() => app.modal({ type: 'resume', student: s })}><Play size={14} weight="fill" />Retomar</Button><Menu label={`Más acciones para ${s.name}`} items={[{ label: 'Editar pausa', icon: <PencilSimple size={16} />, onSelect: () => app.modal({ type: 'pause', student: s }) }]} /></span>}
+    </li>; })}</ul>
+  </section>;
 }
 
-/** Tabla de alumnos activos: primero quienes piden atención. Sin marco; las filas se separan con una línea. */
-function Roster({ w, students, health }: { w: Workspace; students: Student[]; health: Map<string, Health> }) {
+/** En espera: no piden nada hasta su fecha. Compacto y al final, para que no compita con lo que sí requiere atención. */
+function WaitingList({ w, assignments }: { w: Workspace; assignments: Assignment[] }) {
   const app = useApp();
-  const [filter, setFilter] = useState<'all' | 'stale' | HealthGroup>('all'); const [search, setSearch] = useState('');
+  const rows = [...assignments].sort((a, b) => (a.blockedReviewAt ?? '').localeCompare(b.blockedReviewAt ?? ''));
+  return <section className="rail-block waiting" aria-labelledby="waiting-title">
+    <h3 id="waiting-title" className="waiting-head"><Hourglass size={15} weight="bold" aria-hidden="true" />En espera<span className="count">{rows.length}</span></h3>
+    <p className="waiting-desc">Detenidas por algo externo. No requieren nada hasta su fecha de revisión.</p>
+    <ul>{rows.map(a => { const s = w.students.find(x => x.id === a.studentId); return <li key={a.id}><button type="button" onClick={() => app.openAssignment(a.id)}>
+      <Avatar name={s?.name ?? 'Alumno'} avatar={s?.avatar} size="sm" />
+      <span><strong>{a.title}</strong><small>{s?.name} · {a.blockedReason}</small></span>
+      <span className="waiting-when">{formatDate(`${a.blockedReviewAt}T12:00:00-06:00`, { weekday: 'short' })}</span>
+    </button></li>; })}</ul>
+  </section>;
+}
+
+type RosterFilter = 'all' | 'stale' | HealthGroup;
+/** Tabla de alumnos activos: primero quienes piden atención. La dona resume y filtra; sus segmentos y las pestañas son el mismo filtro. */
+function Roster({ w, students, health, filter, onFilter, paused = [] }: { w: Workspace; students: Student[]; health: Map<string, Health>; filter: RosterFilter; onFilter: (f: RosterFilter) => void; paused?: Student[] }) {
+  const app = useApp();
+  const [search, setSearch] = useState(''); const [peek, setPeek] = useState<RosterFilter | null>(null);
   const rows = [...students]
     .sort((a, b) => SEVERITY.indexOf(health.get(a.id)!) - SEVERITY.indexOf(health.get(b.id)!) || a.name.localeCompare(b.name))
     .map(s => ({ s, h: health.get(s.id)!, current: currentAssignment(w, s.id), next: nextReview(w, s.id), follow: followUp(w, s) }));
   const q = normalize(search.trim());
-  const isStale = (r: typeof rows[number]) => r.h !== 'idle' && r.follow.stale;
+  const isStale = (r: typeof rows[number]) => r.h !== 'idle' && r.h !== 'waiting' && r.follow.stale;
   const visible = rows.filter(r => (filter === 'all' || (filter === 'stale' ? isStale(r) : inGroup(r.h, filter))) && normalize(`${r.s.name} ${r.s.registration} ${r.s.technologies.join(' ')}`).includes(q));
-  const options = [
-    { value: 'all' as const, label: 'Todos', count: rows.length },
-    ...HEALTH_GROUPS.map(g => ({ value: g.id, label: g.label, count: rows.filter(r => inGroup(r.h, g.id)).length, tone: g.tone })).filter(o => o.count || o.value === filter),
-    ...[{ value: 'stale' as const, label: 'Sin seguimiento', count: rows.filter(isStale).length, tone: 'warn' as const }].filter(o => o.count || o.value === filter),
+  const groups = HEALTH_GROUPS.map(g => ({ ...g, members: rows.filter(r => inGroup(r.h, g.id)) }));
+  // Un solo filtro: la leyenda de la dona. «Sin seguimiento» no es un segmento (se cruza con los demás), por eso va aparte.
+  const entries: { id: RosterFilter; label: string; one: string; tone: string; members: typeof rows }[] = [
+    ...groups.map(g => ({ id: g.id as RosterFilter, label: g.label, one: g.one, tone: g.id === 'idle' ? 'idle' : g.tone, members: g.members })),
+    { id: 'stale', label: 'Sin seguimiento', one: 'Sin seguimiento', tone: 'warn', members: rows.filter(isStale) },
   ];
+  const focus = entries.find(x => x.id === (peek ?? filter)) ?? null;
+  const pick = (id: RosterFilter) => onFilter(filter === id ? 'all' : id);
   return <section className="roster" aria-labelledby="roster-title">
     <div className="block-head">
       <h2 id="roster-title" className="block-title">{app.readonly ? 'Alumnos' : 'Mis alumnos'}<span className="count">{rows.length}</span></h2>
       <div className="roster-tools"><Search value={search} onChange={setSearch} placeholder="Buscar alumno" label="Buscar alumnos" /><TextLink onClick={() => app.navigate('students')}>Ver todos</TextLink></div>
     </div>
-    {rows.length > 0 && <FilterTabs label="Filtrar por situación" value={filter} onChange={setFilter} options={options} />}
+    {rows.length > 0 && <div className="roster-health">
+      <Donut size={92} stroke={11} label={groups.map(g => `${g.label}: ${g.members.length}`).join(', ')} active={focus && focus.id !== 'stale' ? focus.id : null} onHover={id => setPeek(id as RosterFilter | null)} onPick={id => pick(id as RosterFilter)}
+        segments={groups.map(g => ({ id: g.id, value: g.members.length, tone: g.id === 'idle' ? 'idle' : g.tone }))}>
+        {focus ? <><strong>{focus.members.length}</strong><span>{(focus.members.length === 1 ? focus.one : focus.label).toLowerCase()}</span></> : <><strong>{rows.length}</strong><span>alumnos</span></>}
+      </Donut>
+      <ul className="health-legend" aria-label="Filtrar la tabla por situación">{entries.filter(x => x.members.length || x.id === filter).map(x => <li key={x.id} className={x.id === 'stale' ? 'is-apart' : ''}>
+        <button type="button" aria-pressed={filter === x.id} className={`tone-${x.tone}`} onClick={() => pick(x.id)} onPointerEnter={() => setPeek(x.id)} onPointerLeave={() => setPeek(null)} onFocus={() => setPeek(x.id)} onBlur={() => setPeek(null)}>
+          {x.id === 'stale' ? <ClockCounterClockwise size={12} weight="bold" className="legend-icon" /> : <i className="legend-dot" />}<strong>{x.members.length}</strong>{(x.members.length === 1 ? x.one : x.label).toLowerCase()}
+        </button>
+      </li>)}</ul>
+      {/* Quiénes son, sin abrir nada: las caras del segmento señalado. */}
+      <div className="health-faces" aria-live="polite">
+        {focus ? <><span className="health-faces-label">{focus.label}{filter !== 'all' && !peek && <button type="button" className="faces-clear" onClick={() => onFilter('all')}>Quitar filtro</button>}</span><span className="avatar-row">{focus.members.slice(0, 6).map(r => <button type="button" key={r.s.id} onClick={() => app.openStudent(r.s.id)} title={r.s.name} aria-label={`${r.s.name}: ${HEALTH[r.h].label}`}><StatusAvatar name={r.s.name} avatar={r.s.avatar} health={r.h} size="sm" /></button>)}{focus.members.length > 6 && <span className="faces-more">+{focus.members.length - 6}</span>}</span></>
+          : <span className="health-faces-hint">Señala un color para ver quiénes son; haz clic para filtrar la tabla.</span>}
+      </div>
+    </div>}
     {rows.length === 0 ? <p className="side-empty">Aún no tienes alumnos activos. Agrégalos desde la sección Alumnos.</p> : <div className="table-scroll">
       <table className="table table-flat table-cards">
         <thead><tr><th>Alumno</th><th className="col-md">Actividad actual</th><th className="col-lg">Próxima revisión</th><th><span className="sr-only">Acciones</span></th></tr></thead>
@@ -273,18 +314,21 @@ function Roster({ w, students, health }: { w: Workspace; students: Student[]; he
             <StatusAvatar name={s.name} avatar={s.avatar} health={h} />
             <span><strong>{s.name}</strong><small className={`health-text tone-${HEALTH[h].dot}`}><i className="legend-dot" aria-hidden="true" />{HEALTH[h].label}</small></span>
           </button></td>
-          <td className="col-md c-show">{current ? <span className="cell-progress"><Steps {...activitySteps(current, w)} /><span className="cell-stack"><span className="cell-title">{current.title}</span><small>{dueText(current)}{(() => { const p = assignmentProgress(current, w); return p !== null && p < 100 ? ` · ${p} %` : ''; })()}</small></span></span> : <span className="muted">Ninguna</span>}</td>
-          <td className="col-lg"><NextReviewCell next={next} follow={follow} idle={h === 'idle'} /></td>
+          <td className="col-md c-show">{current ? <span className="cell-progress"><Steps {...activitySteps(current, w)} /><span className="cell-stack"><span className="cell-title">{current.title}</span><small>{isWaiting(current) ? `En espera hasta el ${formatDate(`${current.blockedReviewAt}T12:00:00-06:00`, { weekday: 'short' })}` : dueText(current)}{(() => { const p = assignmentProgress(current, w); return p !== null && p < 100 ? ` · ${p} %` : ''; })()}</small></span></span> : <span className="muted">Ninguna</span>}</td>
+          <td className="col-lg"><NextReviewCell next={next} follow={h === 'waiting' ? { ...follow, stale: false } : follow} idle={h === 'idle'} /></td>
           <td className="cell-actions">{!app.readonly && <span className="row-actions"><StudentAction student={s} /><Menu label={`Más acciones para ${s.name}`} items={[
             ...(current ? [{ label: 'Registrar avance o entrega', icon: <TrendUp size={16} />, onSelect: () => app.modal({ type: 'progress', assignment: current }) }] : []),
+            ...(current && current.status !== 'pending_review' ? [current.blockedReason ? { label: 'Resolver impedimento', icon: <Barricade size={16} />, onSelect: () => app.modal({ type: 'block', assignment: current, mode: 'resolve' }) } : { label: 'Marcar impedimento', icon: <Barricade size={16} />, onSelect: () => app.modal({ type: 'block', assignment: current, mode: 'mark' }) }] : []),
             { label: 'Asignar actividad', icon: <Plus size={16} />, onSelect: () => app.modal({ type: 'assignment', studentId: s.id }) },
             { label: 'Programar revisión', icon: <CalendarPlus size={16} />, onSelect: () => app.modal({ type: 'review', studentId: s.id }) },
             'separator',
             { label: 'Editar expediente', icon: <PencilSimple size={16} />, onSelect: () => app.modal({ type: 'student', student: s }) },
+            { label: 'Pausar participación', icon: <Pause size={16} />, onSelect: () => app.modal({ type: 'pause', student: s }) },
           ]} /></span>}</td>
         </tr>)}</tbody>
       </table>
-      {!visible.length && <Empty icon={<UsersThree size={20} />} title="No encontramos alumnos" description="Prueba con otro nombre o cambia el filtro." action={filter !== 'all' || search ? <Button variant="secondary" size="sm" onClick={() => { setFilter('all'); setSearch(''); }}>Quitar filtros</Button> : undefined} />}
+      {paused.length > 0 && <PausedList students={paused} />}
+      {!visible.length && <Empty icon={<UsersThree size={20} />} title="No encontramos alumnos" description="Prueba con otro nombre o cambia el filtro." action={filter !== 'all' || search ? <Button variant="secondary" size="sm" onClick={() => { onFilter('all'); setSearch(''); }}>Quitar filtros</Button> : undefined} />}
     </div>}
   </section>;
 }
@@ -368,7 +412,7 @@ function LabOverview({ switcher, onArea }: { switcher: ReactNode; onArea: (area:
       </section>)}
     </div>
     <div className="overview-lower">
-      <section aria-label="Calendario del laboratorio"><Calendar w={w} selected={selected} onSelect={setSelected} byArea /></section>
+      <section aria-label="Calendario del laboratorio"><Calendar w={w} selected={selected} onSelect={k => setSelected(k ?? today())} byArea /></section>
       <div className="overview-side">
         <section aria-labelledby="overview-meetings">
           <SectionTitle id="overview-meetings" title="Próximas reuniones" count={meetings.length}><TextLink onClick={() => app.modal({ type: 'meeting', date: selected >= today() ? selected : undefined })}>Agendar</TextLink></SectionTitle>

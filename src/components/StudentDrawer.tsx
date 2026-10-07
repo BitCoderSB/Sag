@@ -1,13 +1,13 @@
 import { useRef, useState, type FormEvent } from 'react';
-import { CalendarPlus, Certificate, EnvelopeSimple, NotePencil, PencilSimple, Plus, TrendUp, TrendDown, Star, Target, ArrowRight } from '@phosphor-icons/react';
+import { CalendarPlus, Certificate, Pause, Play, EnvelopeSimple, NotePencil, PencilSimple, Plus, TrendUp, TrendDown, Star, Target, ArrowRight } from '@phosphor-icons/react';
 import { useApp } from '../context';
-import { activitySteps, assignmentProgress, assignmentState, studentStep, cleanDetail, currentAssignment, dueText, formatDate, formatTime, groupSkillAverages, HEALTH, isOpen, plural, post, punctuality, scoped, skillStats, skillTrend, studentHealth } from '../lib';
+import { pauseOf, PAUSE_LABELS, activitySteps, assignmentProgress, assignmentState, studentStep, cleanDetail, currentAssignment, dueText, formatDate, formatTime, groupSkillAverages, HEALTH, isOpen, plural, post, punctuality, scoped, skillStats, skillTrend, studentHealth } from '../lib';
 import { AreaTag, Badge, Button, Drawer, Empty, ErrorMessage, Field, Menu, Meter, Notice, ProgressRing, Radar, StatusAvatar, Steps, Tabs, areaName } from './ui';
 import ReviewCard from './ReviewCard';
 import StudentPlan, { HoursSummary } from './StudentPlan';
 import StudentAction from './StudentAction';
 
-type Tab = 'summary' | 'plan' | 'skills' | 'notes' | 'history';
+type Tab = 'summary' | 'story' | 'plan' | 'skills' | 'notes' | 'history';
 
 export default function StudentDrawer({ id, onClose }: { id: string; onClose: () => void }) {
   const { workspace: w, readonly, modal, openAssignment, refresh, toast } = useApp();
@@ -17,6 +17,7 @@ export default function StudentDrawer({ id, onClose }: { id: string; onClose: ()
   const [note, setNote] = useState(''); const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const lock = useRef(false);
   if (!student) return <Drawer label="Alumno no disponible" onClose={onClose}><div className="drawer-body"><Empty title="No encontramos este expediente" description="Puede que ya no tengas acceso. Cierra el panel y búscalo de nuevo." /></div></Drawer>;
   const scope = scoped(w);
+  const pause = pauseOf(student, w.user.areaId);
   const health = studentHealth(scope, student);
   const assignments = w.assignments.filter(a => a.studentId === id);
   const current = currentAssignment(w, id);
@@ -29,7 +30,7 @@ export default function StudentDrawer({ id, onClose }: { id: string; onClose: ()
   const notes = w.notes.filter(n => n.studentId === id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const entityIds = new Set([id, ...assignments.map(a => a.id), ...reviews.map(r => r.id)]);
   const history = w.audit.filter(a => entityIds.has(a.entityId)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  const tabs: { id: Tab; label: string; count?: number }[] = full ? [{ id: 'summary', label: 'Resumen' }, { id: 'plan', label: 'Plan' }, { id: 'skills', label: 'Habilidades', count: stats.length }, { id: 'notes', label: 'Notas', count: notes.length }, { id: 'history', label: 'Historial' }] : [{ id: 'skills', label: 'Habilidades', count: stats.length }];
+  const tabs: { id: Tab; label: string; count?: number }[] = full ? [{ id: 'summary', label: 'Resumen' }, { id: 'story', label: 'Historia', count: assignments.filter(a => a.status !== 'cancelled').length }, { id: 'plan', label: 'Plan' }, { id: 'skills', label: 'Habilidades', count: stats.length }, { id: 'notes', label: 'Notas', count: notes.length }, { id: 'history', label: 'Historial' }] : [{ id: 'skills', label: 'Habilidades', count: stats.length }];
   const skillName = (skillId: string) => w.skills.find(k => k.id === skillId)?.name ?? 'Habilidad';
   const best = stats[0]; const weakest = stats.length > 1 ? stats[stats.length - 1] : undefined;
   const onTime = punctuality(w, id);
@@ -59,11 +60,13 @@ export default function StudentDrawer({ id, onClose }: { id: string; onClose: ()
       </div>
     </header>
     {editable && <div className="drawer-actions">
-      {student.status === 'active' && <StudentAction student={student} full size="md" primary />}
-      {student.status === 'active' && studentStep(scope, student).kind !== 'assign' && <Button variant="secondary" title="Asignar otra actividad" onClick={() => modal({ type: 'assignment', studentId: id })}><Plus size={16} weight="bold" />Actividad</Button>}
+      {student.status === 'active' && !pause && <StudentAction student={student} full size="md" primary />}
+      {student.status === 'active' && !pause && studentStep(scope, student).kind !== 'assign' && <Button variant="secondary" title="Asignar otra actividad" onClick={() => modal({ type: 'assignment', studentId: id })}><Plus size={16} weight="bold" />Actividad</Button>}
       {student.status === 'active' && <Button variant="secondary" title="Programar revisión" onClick={() => modal({ type: 'review', studentId: id })}><CalendarPlus size={16} />Revisión</Button>}
-      <Menu label="Más acciones" items={[{ label: 'Editar expediente', icon: <PencilSimple size={16} />, onSelect: () => modal({ type: 'student', student }) }, { label: 'Generar constancia', icon: <Certificate size={16} />, onSelect: () => modal({ type: 'certificate', studentId: id }) }]} />
+      <Menu label="Más acciones" items={[{ label: 'Editar expediente', icon: <PencilSimple size={16} />, onSelect: () => modal({ type: 'student', student }) }, { label: 'Generar constancia', icon: <Certificate size={16} />, onSelect: () => modal({ type: 'certificate', studentId: id }) },
+        pause ? { label: 'Retomar participación', icon: <Play size={16} />, onSelect: () => modal({ type: 'resume', student }) } : { label: 'Pausar participación', icon: <Pause size={16} />, onSelect: () => modal({ type: 'pause', student }) }]} />
     </div>}
+    {pause && <div className="pause-banner"><Pause size={16} weight="fill" aria-hidden="true" /><span><strong>En pausa en tu área · {PAUSE_LABELS[pause.kind]}</strong><small>Desde {formatDate(pause.since)} · {pause.returnAt ? `regresa el ${formatDate(`${pause.returnAt}T12:00:00-06:00`, { weekday: 'short' })}` : 'sin fecha de regreso'}{pause.reason ? ` · ${pause.reason}` : ''}</small></span>{editable && <Button size="sm" variant="secondary" onClick={() => modal({ type: 'resume', student })}>Retomar</Button>}</div>}
     {readonly && <div className="drawer-actions"><Button variant="secondary" onClick={() => modal({ type: 'certificate', studentId: id })}><Certificate size={16} />Generar constancia</Button></div>}
     {tabs.length > 1 && <Tabs value={tab} onChange={setTab} tabs={tabs} label="Secciones del expediente" idPrefix="student-tab" panelId="student-panel" />}
     <div key={tab} className="drawer-body tab-panel" role="tabpanel" id="student-panel" aria-labelledby={`student-tab-${tab}`}>
@@ -71,12 +74,12 @@ export default function StudentDrawer({ id, onClose }: { id: string; onClose: ()
 
       {tab === 'summary' && full && <>
         <section className="highlights" aria-label="Lo importante">
-          <div className={`highlight highlight-now tone-${HEALTH[health].dot}`}>
-            <span className="highlight-label">Ahora</span>
+          <div className="highlight highlight-now">
+            <span className="highlight-label">Ahora{current && (() => { const st = assignmentState(current, w); return <Badge tone={st.tone} dot>{st.label}</Badge>; })()}</span>
             {current ? <button type="button" className="highlight-now-body" onClick={() => openAssignment(current.id)}>
               <span className="highlight-title">{current.title}</span>
               <span className="highlight-now-row"><Steps {...activitySteps(current, w)} size="lg" /></span>
-              <span className="highlight-sub">{activitySteps(current, w).label} · {dueText(current)}</span>
+              <span className="highlight-sub">{dueText(current)}</span>
               {(() => { const p = assignmentProgress(current, w); return p !== null ? <span className="highlight-progress"><span className="progress-preview"><span style={{ width: `${p}%` }} /></span><small>{p} %</small></span> : null; })()}
             </button> : <p className="highlight-title muted">Sin actividad abierta{readonly ? '' : ' en tu área'}</p>}
             <span className="highlight-foot">{totalOpen === 0 ? 'Sin trabajo abierto en ninguna área' : `${plural(totalOpen, 'actividad abierta', 'actividades abiertas')} en total`}</span>
@@ -130,6 +133,7 @@ export default function StudentDrawer({ id, onClose }: { id: string; onClose: ()
         </section>
       </>}
 
+      {tab === 'story' && full && <StudentStory studentId={id} />}
       {tab === 'plan' && full && <StudentPlan student={student} />}
 
       {tab === 'skills' && (stats.length ? <>
@@ -179,4 +183,28 @@ export default function StudentDrawer({ id, onClose }: { id: string; onClose: ()
       </>}
     </div>
   </Drawer>;
+}
+
+/** Historia del alumno: su recorrido como tablero. Columnas por fase (si las usa) o por mes; cada tarjeta con su resultado. */
+function StudentStory({ studentId }: { studentId: string }) {
+  const { workspace: w, openAssignment } = useApp();
+  const list = w.assignments.filter(a => a.studentId === studentId && a.status !== 'cancelled').sort((a, b) => (a.startAt ?? a.createdAt).localeCompare(b.startAt ?? b.createdAt));
+  if (!list.length) return <Empty title="Aún no hay historia" description="Cuando tenga actividades, aquí verás su recorrido por fase o por mes." />;
+  const byPhase = list.some(a => a.phase);
+  const keyOf = (a: typeof list[number]) => byPhase ? (a.phase || 'Sin fase') : formatDate(a.startAt ?? a.createdAt, { day: undefined, month: 'long', year: 'numeric' });
+  const groups = [...new Set(list.map(keyOf))].map(k => ({ key: k, items: list.filter(a => keyOf(a) === k) }));
+  const done = list.filter(a => a.status === 'completed').length;
+  return <div className="story">
+    <p className="story-summary"><strong>{done} de {list.length}</strong> actividades terminadas · agrupadas por {byPhase ? 'fase' : 'mes'}</p>
+    <div className="story-board">{groups.map(g => <section key={g.key} className="story-col" aria-label={g.key}>
+      <header><strong>{g.key}</strong><span className="count">{g.items.length}</span><small>{g.items.filter(a => a.status === 'completed').length} terminadas</small></header>
+      {g.items.map(a => { const st = assignmentState(a, w); const ev = w.evaluations.find(e => e.assignmentId === a.id && e.current); const scores = ev?.scores.filter(s => s.score !== null).map(s => s.score!) ?? []; const avg = scores.length ? scores.reduce((n, v) => n + v, 0) / scores.length : null;
+        return <button type="button" key={a.id} className={`story-card tone-${st.tone}`} onClick={() => openAssignment(a.id)}>
+          <Badge tone={st.tone} dot>{st.label}</Badge>
+          <strong>{a.title}</strong>
+          <small>{formatDate(a.startAt ?? a.createdAt)} → {a.status === 'completed' ? formatDate(a.updatedAt) : a.dueAt ? formatDate(a.dueAt) : 'sin fecha'}</small>
+          {avg !== null && <span className="story-score"><Meter value={avg} /><b>{avg.toFixed(1)}</b></span>}
+        </button>; })}
+    </section>)}</div>
+  </div>;
 }

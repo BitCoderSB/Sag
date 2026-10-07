@@ -8,7 +8,7 @@ import { mkdirSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
 import { extname, resolve, sep } from 'node:path';
 import { Store, checkPassword, id, now, publicUser, type StoredSession } from './db.js';
 import { ANIMALS, isAnimal, pickAnimal } from '../shared/avatars.js';
-import { AREAS, type User, type Student, type Assignment, type Review, type Skill, type Evaluation, type Delivery, type StudentNote, type Meeting, type Attachment, type AuditEvent, type Workspace } from '../shared/types.js';
+import { type ActivityDraft, AREAS, type User, type Student, type Assignment, type Review, type Skill, type Evaluation, type Delivery, type StudentNote, type Meeting, type Attachment, type AuditEvent, type Workspace } from '../shared/types.js';
 
 type AuthRequest = Request & { actor?: User; session?: StoredSession };
 interface FileRecord extends Attachment { storageName: string; mimeType: string }
@@ -27,7 +27,7 @@ const studentShape = { name: text(160).min(2), registration, email: z.union([z.e
 const studentCreate = z.object(studentShape).strict();
 const studentPatch = z.object({ ...studentShape, version: z.number().int().positive(), status: z.enum(['active','paused','completed']) }).strict();
 const assignmentCreate = z.object({ studentId: identifier, title: text(200).min(3), description: text(10000).default(''), project: text(200).default(''), dueAt: date.nullable().default(null), reviewAt: date, skillIds: z.array(identifier).min(1).max(30).transform(a=>[...new Set(a)]), startAt: date.nullable().default(null), phase: text(80).default(''), priority: z.enum(['normal','high']).default('normal'), links: z.array(z.object({ label: text(120).min(1), url: httpUrl.refine(Boolean,'El enlace es obligatorio.') }).strict()).max(20).default([]) }).strict();
-const assignmentPatch = z.object({ version: z.number().int().positive(), status: z.enum(['in_progress','pending_review','changes_requested','completed','cancelled']).optional(), blockedReason: text(2000).optional(), dueAt: date.nullable().optional(), changeReason: text(1000).optional(), title: text(200).min(3).optional(), description: text(10000).optional(), project: text(200).optional(), startAt: date.nullable().optional(), phase: text(80).optional(), links: z.array(z.object({ label: text(120).min(1), url: httpUrl.refine(Boolean,'El enlace es obligatorio.') }).strict()).max(20).optional() }).strict();
+const assignmentPatch = z.object({ version: z.number().int().positive(), status: z.enum(['in_progress','pending_review','changes_requested','completed','cancelled']).optional(), blockedReason: text(2000).optional(), dueAt: date.nullable().optional(), changeReason: text(1000).optional(), title: text(200).min(3).optional(), description: text(10000).optional(), project: text(200).optional(), startAt: date.nullable().optional(), phase: text(80).optional(), blockNote: text(1000).optional(), blockedReviewAt: day.nullable().optional(), links: z.array(z.object({ label: text(120).min(1), url: httpUrl.refine(Boolean,'El enlace es obligatorio.') }).strict()).max(20).optional() }).strict();
 const deliveryCreate = z.object({ version: z.number().int().positive(), receivedAt: date, summary: text(6000).min(3), url: httpUrl.default(''), completeness: z.enum(['partial','complete','not_submitted']), hours: hours.nullable().default(null), progress: z.number().int().min(0).max(100).nullable().default(null) }).strict();
 const evaluationCreate = z.object({ version: z.number().int().positive(), scores: z.array(z.object({ skillId: identifier, score: z.number().min(0).max(10).nullable(), comment: text(2000).default('') }).strict()).min(1).max(30), feedback: text(6000).default(''), outcome: z.enum(['completed','changes_requested']), nextReviewAt: date.optional(), reviewId: identifier.optional() }).strict();
 const reviewCreate = z.object({ studentId: identifier, assignmentId: identifier.nullable().default(null), startsAt: date, durationMinutes: z.number().int().min(5).max(480).default(30), type: z.enum(['follow_up','delivery','evaluation']).default('follow_up'), notes: text(6000).default('') }).strict();
@@ -135,14 +135,36 @@ export function createApp(options: AppOptions) {
     const allAssignments = store.all<Assignment>('assignments');
     const students = store.all<Student>('students').map(s=>{
       const safe = user.role==='director'||s.areaIds.includes(user.areaId!) ? s : {...s,email:'',career:'',semester:'',modalities:[]};
-      return {...safe,openAssignmentCount:allAssignments.filter(a=>a.studentId===s.id&&!['completed','cancelled'].includes(a.status)).length};
+      const pauses = user.role==='director' ? s.pauses : s.pauses?.[user.areaId!] ? {[user.areaId!]:s.pauses[user.areaId!]} : undefined;
+      return {...safe,pauses,openAssignmentCount:allAssignments.filter(a=>a.studentId===s.id&&!['completed','cancelled'].includes(a.status)).length};
     });
     const assignments = allAssignments.filter(a=>visibleArea(a.areaId));
     const assignmentIds = new Set(assignments.map(a=>a.id));
     const evaluations = store.all<Evaluation>('evaluations').map(e=>visibleArea(e.areaId) ? e : {...e,feedback:'',scores:e.scores.map(s=>({...s,comment:''}))});
-    return { user,areas:AREAS,students,assignments,reviews:store.all<Review>('reviews').filter(r=>visibleArea(r.areaId)),skills:store.all<Skill>('skills'),deliveries:store.all<Delivery>('deliveries').filter(d=>assignmentIds.has(d.assignmentId)),evaluations,notes:store.all<StudentNote>('notes').filter(n=>visibleArea(n.areaId)),attachments:store.all<FileRecord>('attachments').filter(f=>assignmentIds.has(f.assignmentId)).map(({storageName:_,mimeType:__,...file})=>file),audit:store.all<AuditEvent>('audit').filter(a=>visibleArea(a.areaId)).slice(-200).reverse(),meetings:store.all<Meeting>('meetings').filter(m=>user.role==='director'||m.areaIds.includes(user.areaId!)) };
+    const drafts = store.all<ActivityDraft>('drafts').filter(d=>visibleArea(d.areaId));
+    return { user,areas:AREAS,students,assignments,drafts,reviews:store.all<Review>('reviews').filter(r=>visibleArea(r.areaId)),skills:store.all<Skill>('skills'),deliveries:store.all<Delivery>('deliveries').filter(d=>assignmentIds.has(d.assignmentId)),evaluations,notes:store.all<StudentNote>('notes').filter(n=>visibleArea(n.areaId)),attachments:store.all<FileRecord>('attachments').filter(f=>assignmentIds.has(f.assignmentId)).map(({storageName:_,mimeType:__,...file})=>file),audit:store.all<AuditEvent>('audit').filter(a=>visibleArea(a.areaId)).slice(-200).reverse(),meetings:store.all<Meeting>('meetings').filter(m=>user.role==='director'||m.areaIds.includes(user.areaId!)) };
   }
   app.get('/api/workspace',auth,(req,res)=>res.json(workspace(actor(req))));
+  // Banco de actividades: preparadas sin alumno, por área. Borrar una no toca datos de alumnos.
+  const draftBody = z.object({ title: text(200).min(3), description: text(10000).default(''), skillIds: z.array(identifier).max(30).default([]).transform(a=>[...new Set(a)]), links: assignmentCreate.shape.links, phase: text(80).default('') }).strict();
+  const draftFor = (req: Request, draftId: string) => { const d = store.get<ActivityDraft>('drafts',draftId) ?? fail(404,'No encontramos esa actividad del banco.'); if (d.areaId!==actor(req).areaId) fail(403,'Esa actividad es de otra área.'); return d; };
+  app.post('/api/drafts',...mutate,(req,res)=>{
+    const body = draftBody.parse(req.body); const user = actor(req);
+    if (body.skillIds.some(skillId=>{const s=store.get<Skill>('skills',skillId);return !s || (s.areaId!==null && s.areaId!==user.areaId);})) fail(400,'Selecciona habilidades de tu área o habilidades compartidas.');
+    const draft = store.transaction(()=>{ const d = store.put<ActivityDraft>('drafts',{...body,id:id('draft'),areaId:user.areaId!,createdAt:now(),updatedAt:now(),version:1}); audit(user,'draft_created',d.id,`Se preparó «${d.title}» en el banco de actividades.`); return d; });
+    res.status(201).json({draft});
+  });
+  app.patch('/api/drafts/:id',...mutate,(req,res)=>{
+    const body = draftBody.partial().extend({ version: z.number().int().positive() }).strict().parse(req.body);
+    const draft = draftFor(req,String(req.params.id)); checkVersion(draft.version,body.version);
+    const {version:_,...fields} = body;
+    res.json({draft:store.put('drafts',{...draft,...fields,updatedAt:now(),version:draft.version+1})});
+  });
+  app.delete('/api/drafts/:id',...mutate,(req,res)=>{
+    const draft = draftFor(req,String(req.params.id));
+    store.transaction(()=>{ store.remove('drafts',draft.id); audit(actor(req),'draft_removed',draft.id,`Se quitó «${draft.title}» del banco de actividades.`); });
+    res.json({ok:true});
+  });
   app.post('/api/students',...mutate,(req,res)=>{
     const body = studentCreate.parse(req.body);
     periodCheck(body);
@@ -163,6 +185,32 @@ export function createApp(options: AppOptions) {
     if (!student.areaIds.includes(areaId)) store.transaction(()=>{ student.areaIds.push(areaId); student.version++; store.put('students',student); audit(actor(req),'student_joined',student.id,`${student.name} se incorporó al área. Se conserva su expediente único.`); });
     res.json({student});
   });
+  // Pausa por área: motivo, regreso esperado y qué hacer con lo abierto. Volver a enviarla actualiza la pausa (p. ej. extender el regreso).
+  const pauseBody = z.object({ kind: z.enum(['temporary','health','exams','no_contact']), reason: text(1000).default(''), returnAt: day.nullable().default(null), assignments: z.enum(['keep','cancel']).default('keep'), cancelReviews: z.boolean().default(true) }).strict();
+  const pauseLabels = { temporary:'Baja temporal', health:'Salud o asunto personal', exams:'Exámenes o vacaciones', no_contact:'Sin contacto' };
+  app.post('/api/students/:id/pause',...mutate,(req,res)=>{
+    const body = pauseBody.parse(req.body);
+    const student = studentFor(req,String(req.params.id)); const user = actor(req); const areaId = user.areaId!;
+    if (body.returnAt && body.returnAt < new Date().toISOString().slice(0,10)) fail(400,'La fecha de regreso no puede estar en el pasado.');
+    const previous = student.pauses?.[areaId];
+    const updated = store.transaction(()=>{
+      const result = store.put<Student>('students',{...student,pauses:{...student.pauses,[areaId]:{kind:body.kind,reason:body.reason.trim(),since:previous?.since ?? now(),returnAt:body.returnAt}},version:student.version+1});
+      let cancelled = 0; let reviews = 0;
+      if (!previous && body.assignments==='cancel') for (const a of store.all<Assignment>('assignments').filter(a=>a.studentId===student.id&&a.areaId===areaId&&!['completed','cancelled'].includes(a.status))) { store.put('assignments',{...a,status:'cancelled',updatedAt:now(),version:a.version+1}); cancelled++; }
+      if (!previous && (body.cancelReviews || body.assignments==='cancel')) for (const r of store.all<Review>('reviews').filter(r=>r.studentId===student.id&&r.areaId===areaId&&r.status==='scheduled'&&Date.parse(r.startsAt)>=Date.now())) { store.put('reviews',{...r,status:'cancelled',outcome:'Participación en pausa.',version:r.version+1}); reviews++; }
+      audit(user,previous?'student_pause_updated':'student_paused',student.id,previous ? `Pausa actualizada: ${pauseLabels[body.kind]}. Regreso: ${body.returnAt??'sin fecha'}.` : `Participación en pausa: ${pauseLabels[body.kind]}.${body.reason.trim()?` ${body.reason.trim()}.`:''} Regreso: ${body.returnAt??'sin fecha'}.${cancelled?` Actividades canceladas: ${cancelled}.`:''}${reviews?` Revisiones canceladas: ${reviews}.`:''}`);
+      return result;
+    });
+    res.json({student:updated});
+  });
+  app.post('/api/students/:id/resume',...mutate,(req,res)=>{
+    z.object({}).strict().parse(req.body);
+    const student = studentFor(req,String(req.params.id)); const user = actor(req); const areaId = user.areaId!;
+    const pause = student.pauses?.[areaId] ?? fail(409,'Su participación en tu área no está en pausa.');
+    const {[areaId]:_,...rest} = student.pauses!;
+    const updated = store.transaction(()=>{ const result = store.put<Student>('students',{...student,pauses:rest,version:student.version+1}); audit(user,'student_resumed',student.id,`Retoma su participación (estuvo en pausa desde ${pause.since.slice(0,10)}: ${pauseLabels[pause.kind]}).`); return result; });
+    res.json({student:updated});
+  });
   app.patch('/api/students/:id',...mutate,(req,res)=>{
     const body = studentPatch.parse(req.body);
     const student = studentFor(req,String(req.params.id));
@@ -178,6 +226,7 @@ export function createApp(options: AppOptions) {
     startCheck(body);
     const student = studentFor(req,body.studentId);
     if (student.status!=='active') fail(409,'Activa al alumno antes de asignarle nuevas actividades.');
+    if (student.pauses?.[actor(req).areaId!]) fail(409,'Su participación en tu área está en pausa. Reactívala antes de asignarle actividades.','STUDENT_PAUSED');
     if (body.skillIds.some(skillId=>{const s=store.get<Skill>('skills',skillId);return !s || (s.areaId!==null && s.areaId!==actor(req).areaId);})) fail(400,'Selecciona habilidades de tu área o habilidades compartidas.');
     const user = actor(req);
     const result = store.transaction(()=>{
@@ -201,11 +250,24 @@ export function createApp(options: AppOptions) {
       if (!transitions[assignment.status].includes(body.status)) fail(409,'Ese cambio requiere registrar una entrega o una evaluación. Las actividades cerradas conservan su resultado.');
       if (body.status==='cancelled'&&!body.changeReason) fail(400,'Indica el motivo de cancelación.');
     }
-    const {version:_,changeReason,...fields} = body;
+    const {version:_,changeReason,blockNote,...fields} = body;
+    // Impedimento: el servidor marca desde cuándo; al resolverlo se borra la fecha y el historial guarda cómo se resolvió.
+    const wasBlocked = !!assignment.blockedReason.trim(); const willBlock = body.blockedReason!==undefined ? !!body.blockedReason.trim() : wasBlocked;
+    const blockedSince = !wasBlocked&&willBlock ? now() : wasBlocked&&!willBlock ? null : assignment.blockedSince ?? (wasBlocked ? assignment.updatedAt : null);
+    const blockedReviewAt = !willBlock ? null : body.blockedReviewAt!==undefined ? body.blockedReviewAt : assignment.blockedReviewAt ?? null;
+    const reviewChanged = wasBlocked&&willBlock&&body.blockedReviewAt!==undefined&&body.blockedReviewAt!==(assignment.blockedReviewAt??null);
+    const reasonChanged = wasBlocked&&willBlock&&body.blockedReason!==undefined&&body.blockedReason.trim()!==assignment.blockedReason;
+    const blockEvent =
+      !wasBlocked&&willBlock ? `Impedimento anotado: ${body.blockedReason!.trim()}.${blockNote?` Siguiente paso: ${blockNote}.`:''}${blockedReviewAt?` Se revisa el ${blockedReviewAt}.`:''}`
+      : wasBlocked&&!willBlock ? `Impedimento resuelto: ${assignment.blockedReason}.${blockNote?` Cómo se resolvió: ${blockNote}.`:''}`
+      : reasonChanged ? `Impedimento actualizado: ${body.blockedReason!.trim()}.${reviewChanged?` Se revisa el ${blockedReviewAt??'sin fecha'}.`:''}`
+      : reviewChanged ? `Se sigue esperando; se revisa el ${blockedReviewAt??'sin fecha'}.${blockNote?` ${blockNote}.`:''}`
+      : '';
     const updated = store.transaction(()=>{
-      const result = store.put('assignments',{...assignment,...fields,updatedAt:now(),version:assignment.version+1});
+      const result = store.put('assignments',{...assignment,...fields,blockedSince,blockedReviewAt,updatedAt:now(),version:assignment.version+1});
       if (body.status==='cancelled') for (const review of store.all<Review>('reviews').filter(r=>r.assignmentId===assignment.id&&r.status==='scheduled')) store.put('reviews',{...review,status:'cancelled',outcome:`Actividad cancelada: ${changeReason}`,version:review.version+1});
-      audit(actor(req),'assignment_updated',assignment.id,body.dueAt!==undefined&&body.dueAt!==assignment.dueAt ? `Plazo anterior: ${assignment.dueAt??'sin plazo'}. Nuevo: ${body.dueAt??'sin plazo'}. Motivo: ${changeReason}.` : `Actividad actualizada. ${changeReason??''}`);
+      const dateEvent = body.dueAt!==undefined&&body.dueAt!==assignment.dueAt ? `Plazo anterior: ${assignment.dueAt??'sin plazo'}. Nuevo: ${body.dueAt??'sin plazo'}. Motivo: ${changeReason}.` : '';
+      audit(actor(req),'assignment_updated',assignment.id,[blockEvent,dateEvent].filter(Boolean).join(' ')||`Actividad actualizada. ${changeReason??''}`);
       return result;
     });
     res.json({assignment:updated});

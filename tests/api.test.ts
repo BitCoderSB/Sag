@@ -27,6 +27,9 @@ async function client(role: string): Promise<Client> {
   const cookie=response.headers.get('set-cookie')!.split(';')[0];
   return {cookie,csrf:session.csrf,request:(path,method='GET',body,headers={})=>request(path,method,body,{cookie,'x-csrf-token':session.csrf,...headers})};
 }
+// Sesiones reutilizadas en las pruebas más recientes: el servidor limita los inicios de sesión por dirección.
+const sessions = new Map<string, Promise<Client>>();
+const session = (role: string) => { if (!sessions.has(role)) sessions.set(role, client(role)); return sessions.get(role)!; };
 async function jsonOk(response: Response,status=200) {const body=await response.json();assert.equal(response.status,status,JSON.stringify(body));return body;}
 const future = () => new Date(Date.now()+24*3600*1000).toISOString();
 async function newAssignment(c: Client,studentId='student_1') {
@@ -407,4 +410,69 @@ test('demo sessions use their own cookie so a demo on the same host never replac
   const cookie=response.headers.get('set-cookie')!;
   assert.match(cookie,/^sag_demo_session=/);
   assert.equal((await request('/api/workspace','GET',undefined,{cookie:cookie.split(';')[0].replace('sag_demo_session','sag_session')})).status,401);
+});
+
+test('blocking records since when and keeps how it was resolved in the history',async()=>{
+  const c=await session('software');
+  let a=await newAssignment(c);
+  assert.equal(a.blockedSince??null,null);
+  a=(await jsonOk(await c.request(`/api/assignments/${a.id}`,'PATCH',{version:a.version,blockedReason:'Falta el sensor',blockNote:'Laboratorio lo pide el lunes'}))).assignment;
+  assert.ok(a.blockedSince && Date.now()-Date.parse(a.blockedSince)<60000);
+  const since=a.blockedSince;
+  // Editar otro dato no reinicia la fecha del impedimento.
+  a=(await jsonOk(await c.request(`/api/assignments/${a.id}`,'PATCH',{version:a.version,title:'Práctica de validación revisada'}))).assignment;
+  assert.equal(a.blockedSince,since);
+  a=(await jsonOk(await c.request(`/api/assignments/${a.id}`,'PATCH',{version:a.version,blockedReason:'',blockNote:'Llegó el sensor'}))).assignment;
+  assert.equal(a.blockedSince,null);
+  const w=await jsonOk(await c.request('/api/workspace')) as Workspace;
+  const details=w.audit.filter(e=>e.entityId===a.id).map(e=>e.detail).join(' | ');
+  assert.match(details,/Impedimento anotado: Falta el sensor\. Siguiente paso: Laboratorio lo pide el lunes\./);
+  assert.match(details,/Impedimento resuelto: Falta el sensor\. Cómo se resolvió: Llegó el sensor\./);
+});
+
+test('waiting on an impediment keeps the review date and the history says until when',async()=>{
+  const c=await session('software');
+  let a=await newAssignment(c);
+  const later=new Date(Date.now()+5*86400000).toISOString().slice(0,10);
+  a=(await jsonOk(await c.request(`/api/assignments/${a.id}`,'PATCH',{version:a.version,blockedReason:'Espera aprobación',blockedReviewAt:later}))).assignment;
+  assert.equal(a.blockedReviewAt,later);
+  const after=new Date(Date.now()+9*86400000).toISOString().slice(0,10);
+  a=(await jsonOk(await c.request(`/api/assignments/${a.id}`,'PATCH',{version:a.version,blockedReviewAt:after,blockNote:'Comité se reúne el jueves'}))).assignment;
+  assert.equal(a.blockedReviewAt,after);
+  a=(await jsonOk(await c.request(`/api/assignments/${a.id}`,'PATCH',{version:a.version,blockedReason:''}))).assignment;
+  assert.equal(a.blockedReviewAt,null);
+  const w=await jsonOk(await c.request('/api/workspace')) as Workspace;
+  assert.match(w.audit.filter(e=>e.entityId===a.id).map(e=>e.detail).join(' | '),/Se sigue esperando; se revisa el .+ Comité se reúne el jueves\./);
+});
+
+test('pausing is per area, hides the reason from other areas and blocks new assignments until resumed',async()=>{
+  const sw=await session('software'); const hw=await session('hardware');
+  const shared=(await jsonOk(await sw.request('/api/students','POST',{name:'Alumno Compartido',registration:'PAUSA-01',modalities:['Prácticas']}),201)).student as Student;
+  await jsonOk(await hw.request(`/api/students/${shared.id}/join`,'POST',{}));
+  const a=await newAssignment(sw,shared.id);
+  const back=new Date(Date.now()+14*86400000).toISOString().slice(0,10);
+  const paused=(await jsonOk(await sw.request(`/api/students/${shared.id}/pause`,'POST',{kind:'health',reason:'Incapacidad médica',returnAt:back,assignments:'keep',cancelReviews:true}))).student as Student;
+  assert.equal(paused.pauses?.software?.returnAt,back);
+  assert.equal(paused.status,'active');
+  const reviews=(await jsonOk(await sw.request('/api/workspace')) as Workspace).reviews.filter(r=>r.assignmentId===a.id);
+  assert.ok(reviews.every(r=>r.status!=='scheduled'));
+  const fromHardware=(await jsonOk(await hw.request('/api/workspace')) as Workspace).students.find(s=>s.id===shared.id)!;
+  assert.equal(fromHardware.pauses,undefined);
+  assert.equal((await sw.request('/api/assignments','POST',{studentId:shared.id,title:'Otra actividad',description:'Algo nuevo.',project:'',dueAt:future(),reviewAt:future(),skillIds:['skill_backend']})).status,409);
+  assert.equal((await hw.request('/api/assignments','POST',{studentId:shared.id,title:'Actividad de hardware',description:'Sigue en su otra área.',project:'',dueAt:future(),reviewAt:future(),skillIds:['skill_documentation']})).status,201);
+  const resumed=(await jsonOk(await sw.request(`/api/students/${shared.id}/resume`,'POST',{}))).student as Student;
+  assert.equal(resumed.pauses?.software,undefined);
+});
+
+test('activity bank: drafts belong to an area and can be edited and removed',async()=>{
+  const sw=await session('software'); const hw=await session('hardware');
+  const draft=(await jsonOk(await sw.request('/api/drafts','POST',{title:'Prueba de carga del API',description:'Medir tiempos con 100 usuarios.',skillIds:['skill_backend'],links:[]}),201)).draft;
+  const visible=(await jsonOk(await sw.request('/api/workspace')) as Workspace).drafts!;
+  assert.ok(visible.some(d=>d.id===draft.id));
+  assert.ok(!((await jsonOk(await hw.request('/api/workspace')) as Workspace).drafts??[]).some(d=>d.id===draft.id));
+  assert.equal((await hw.request(`/api/drafts/${draft.id}`,'DELETE',{})).status,403);
+  const edited=(await jsonOk(await sw.request(`/api/drafts/${draft.id}`,'PATCH',{version:draft.version,title:'Prueba de carga del API v2'}))).draft;
+  assert.equal(edited.title,'Prueba de carga del API v2');
+  await jsonOk(await sw.request(`/api/drafts/${draft.id}`,'DELETE',{}));
+  assert.ok(!((await jsonOk(await sw.request('/api/workspace')) as Workspace).drafts??[]).some(d=>d.id===draft.id));
 });

@@ -2,7 +2,7 @@ import { useState, type CSSProperties, type ReactNode } from 'react';
 import { CaretDown } from '@phosphor-icons/react';
 import { DAY, capitalize, formatDate } from '../lib';
 
-export type GanttTone = 'ok' | 'info' | 'warn' | 'danger' | 'neutral' | 'idle';
+export type GanttTone = 'ok' | 'info' | 'warn' | 'danger' | 'neutral' | 'idle' | 'wait';
 export interface GanttMarker { at: number; kind: 'review' | 'review-done' | 'delivery' | 'due'; title: string }
 export interface GanttRow {
   id: string; label: string; sub?: string; group?: string; lead?: ReactNode;

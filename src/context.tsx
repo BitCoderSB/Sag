@@ -1,17 +1,21 @@
 import { createContext, useContext } from 'react';
-import type { AreaId } from '../shared/types';
-import type { Student, Workspace, Assignment, Review, Meeting } from '../shared/types';
+import type { AreaId, PauseKind } from '../shared/types';
+import type { ActivityDraft, Student, Workspace, Assignment, Review, Meeting } from '../shared/types';
 
-export type Page = 'today' | 'agenda' | 'students' | 'assignments' | 'talent' | 'reports' | 'settings';
+export type Page = 'today' | 'board' | 'agenda' | 'students' | 'assignments' | 'talent' | 'reports' | 'settings';
 export type ModalState =
   | { type: 'student'; student?: Student }
-  | { type: 'assignment'; studentId?: string }
-  | { type: 'assignmentEdit'; assignment: Assignment; mode: 'edit' | 'cancel' }
+  | { type: 'assignment'; studentId?: string; dueDate?: string; draft?: ActivityDraft }
+  | { type: 'draft'; draft?: ActivityDraft; remove?: boolean }
+  | { type: 'assignmentEdit'; assignment: Assignment; mode: 'edit' | 'cancel'; dueDate?: string }
   | { type: 'review'; studentId?: string; assignmentId?: string; date?: string }
-  | { type: 'reviewUpdate'; review: Review; mode: 'record' | 'reschedule' | 'cancel' }
+  | { type: 'reviewUpdate'; review: Review; mode: 'record' | 'reschedule' | 'cancel'; date?: string; early?: boolean }
   | { type: 'evaluate'; assignment: Assignment }
-  | { type: 'delivery'; assignment: Assignment }
-  | { type: 'progress'; studentId?: string; assignment?: Assignment }
+  | { type: 'block'; assignment: Assignment; mode: 'mark' | 'wait' | 'resolve' }
+  | { type: 'pause'; student: Student; kind?: PauseKind }
+  | { type: 'resume'; student: Student }
+  | { type: 'delivery'; assignment: Assignment; kind?: 'partial' | 'complete' }
+  | { type: 'progress'; studentId?: string; assignment?: Assignment; kind?: 'partial' | 'complete' }
   | { type: 'certificate'; studentId: string }
   | { type: 'meeting'; meeting?: Meeting; date?: string; areaIds?: AreaId[]; cancel?: boolean }
   | null;

@@ -32,11 +32,11 @@ Que cada responsable sepa al entrar qué tiene que hacer hoy y cómo van sus alu
 - Cada responsable solo modifica su área; puede consultar habilidades evaluadas de alumnos de otras áreas.
 - "Sin evaluar", "cero" y "no entregó" son conceptos distintos y deben seguir distinguiéndose.
 - No hay calificación global del alumno ni comparación de productividad entre áreas.
-- Fuera de alcance por ahora: notificaciones externas, plantillas de actividades, importación masiva.
+- Fuera de alcance por ahora: notificaciones externas, importación masiva. El banco de actividades del Tablero cubre las plantillas (decisión del usuario, 2026-10-05).
 
 ## Brand Commitments
 
-Nombre: SAG. Base visual a conservar (decisión del usuario, 2026-10-01): fondo claro, un color de acción azul, tipografía Geist. Se rehace la experiencia; el aspecto se pule sobre esa base.
+Nombre: SAG. Base visual (decisión del usuario, 2026-10-04, reemplaza el fondo claro del 2026-10-01): modo oscuro por omisión, con tema claro a elección (2026-10-07), un color de acción azul, tipografía Geist. Paneles casi negros sobre fondo negro, calendario de cristal azul y una capa animada sutil que se apaga con «reducir movimiento».
 
 Voz: español de México, directo y funcional. Sin frases motivacionales ni texto decorativo.
 

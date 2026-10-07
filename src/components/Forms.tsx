@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
-import { ArrowRight, Check, File, LinkSimple, PencilSimple, Plus, Trash, UploadSimple, UserPlus, WarningCircle, X } from '@phosphor-icons/react';
-import { AREAS, type AreaId, type Assignment, type Meeting, type Review, type Student } from '../../shared/types';
+import { ArrowRight, Barricade, Check, Clock, Pause, File, LinkSimple, PencilSimple, Plus, Trash, UploadSimple, UserPlus, WarningCircle, X } from '@phosphor-icons/react';
+import { AREAS, type ActivityDraft, type AreaId, type Assignment, type Meeting, type PauseKind, type Review, type Student } from '../../shared/types';
 import { useApp, type ModalState } from '../context';
-import { assignmentProgress, currentAssignment, isOpen as isOpenAssignment, scoped, dateKey, weekLoad, plural, toInputDate, dayDiff, dayLabel, firstName, formatDate, formatTime, fromInput, futureInput, normalize, patch, post, relativeDay, reviewTitle, safeUrl, scoreLevel, skillStats, toInputDateTime, api, linkLabel, fileSize, MAX_FILE, FILE_TYPES, toHttpUrl } from '../lib';
+import { DAY, del, blockedSince, assignmentProgress, assignmentState, dueText, HEALTH, studentHealth, currentAssignment, isOpen as isOpenAssignment, scoped, dateKey, weekLoad, plural, toInputDate, dayDiff, dayLabel, firstName, formatDate, formatTime, fromInput, futureInput, normalize, patch, post, relativeDay, reviewTitle, safeUrl, scoreLevel, skillStats, toInputDateTime, api, linkLabel, fileSize, MAX_FILE, FILE_TYPES, toHttpUrl } from '../lib';
 import { ANIMALS, pickAnimal, type AnimalId } from '../../shared/avatars';
 import { AreaTag, Avatar, Badge, animalName, Button, CheckDraw, ErrorMessage, Field, IconButton, Modal, Notice, Radar, RollingNumber, Segmented, Select } from './ui';
 import { reducedMotion } from '../motion';
+import { FormSection, RichSelect, type PickOption } from './Pickers';
 import AgreementList, { pendingTitle, previousWithPending } from './Agreements';
 import Certificate from './Certificate';
 
@@ -40,8 +41,10 @@ function useSave(onClose: () => void) {
   }
   return { busy, error, setError, save, done };
 }
-function Footer({ busy, done = null, onClose, children, cancelLabel = 'Cancelar', danger = false, disabled = false }: { busy: boolean; done?: string | null; onClose: () => void; children: ReactNode; cancelLabel?: string; danger?: boolean; disabled?: boolean }) {
+/** `summary`: qué va a pasar al guardar, dicho en una línea (prevención de errores). */
+function Footer({ busy, done = null, onClose, children, cancelLabel = 'Cancelar', danger = false, disabled = false, summary }: { busy: boolean; done?: string | null; onClose: () => void; children: ReactNode; cancelLabel?: string; danger?: boolean; disabled?: boolean; summary?: ReactNode }) {
   return <div className="dialog-foot">
+    {summary && <p className="dialog-summary">{summary}</p>}
     <Button variant="secondary" disabled={busy || !!done} onClick={onClose}>{cancelLabel}</Button>
     <Button type="submit" variant={danger ? 'danger' : 'primary'} loading={busy} disabled={disabled || !!done} className={done ? 'is-done' : ''} aria-live="polite">
       {done ? <span className="button-done"><CheckDraw />{done}</span> : children}
@@ -51,7 +54,25 @@ function Footer({ busy, done = null, onClose, children, cancelLabel = 'Cancelar'
 function Locked({ label, children }: { label: string; children: ReactNode }) {
   return <div className="locked"><span className="locked-label">{label}</span><div className="locked-value">{children}</div></div>;
 }
+/** Opciones de alumno con su situación y actividad actual: se reconoce a quién se elige sin recordar nombres. */
+function studentOptions(workspace: ReturnType<typeof useApp>['workspace'], students: Student[]): PickOption[] {
+  const own = scoped(workspace);
+  return students.map(s => { const h = studentHealth(own, s); const a = currentAssignment(own, s.id);
+    return { value: s.id, label: s.name, person: true, avatar: s.avatar, sub: `${HEALTH[h].label}${a ? ` · ${a.title}` : ''}`, tone: h === 'blocked' ? 'danger' as const : h === 'late' ? 'warn' as const : undefined }; });
+}
+function activityOptions(assignments: Assignment[], workspace: ReturnType<typeof useApp>['workspace']): PickOption[] {
+  return assignments.map(a => { const st = assignmentState(a, workspace); return { value: a.id, label: a.title, sub: `${st.label}${a.dueAt ? ` · ${dueText(a)}` : ''}`, tone: st.tone === 'danger' ? 'danger' as const : st.tone === 'warn' ? 'warn' as const : undefined }; });
+}
 const LockedStudent = ({ student }: { student?: Student }) => <Locked label="Alumno"><Avatar name={student?.name ?? 'Alumno'} avatar={student?.avatar} size="sm" /><strong>{student?.name}</strong><small>{student?.registration}</small></Locked>;
+
+/** Casilla para anotar un impedimento sin salir del registro. */
+function BlockCheck({ on, setOn, reason, setReason }: { on: boolean; setOn: (v: boolean) => void; reason: string; setReason: (v: string) => void }) {
+  return <div className={`block-check ${on ? 'is-on' : ''}`}>
+    <label className="switch"><input type="checkbox" checked={on} onChange={e => setOn(e.target.checked)} /><span>Hay algo que le impide avanzar</span></label>
+    {on && <input autoFocus maxLength={2000} value={reason} onChange={e => setReason(e.target.value)} placeholder="Qué lo detiene. Ej. Falta el sensor para las pruebas" aria-label="Qué le impide avanzar" />}
+    {on && <small className="field-hint">La actividad quedará con impedimento hasta que lo resuelvas.</small>}
+  </div>;
+}
 
 /* ---------- Crear habilidad dentro de otro formulario ---------- */
 
@@ -102,13 +123,17 @@ export default function Forms({ state, onClose }: { state: NonNullable<ModalStat
   if (readonly) return null;
   switch (state.type) {
     case 'student': return <StudentForm student={state.student} onClose={onClose} />;
-    case 'assignment': return <AssignmentForm studentId={state.studentId} onClose={onClose} />;
-    case 'assignmentEdit': return <AssignmentEditForm assignment={state.assignment} mode={state.mode} onClose={onClose} />;
+    case 'assignment': return <AssignmentForm studentId={state.studentId} dueDate={state.dueDate} draft={state.draft} onClose={onClose} />;
+    case 'draft': return <DraftForm draft={state.draft} remove={state.remove} onClose={onClose} />;
+    case 'assignmentEdit': return <AssignmentEditForm assignment={state.assignment} mode={state.mode} dueDate={state.dueDate} onClose={onClose} />;
     case 'review': return <ReviewForm studentId={state.studentId} assignmentId={state.assignmentId} date={state.date} onClose={onClose} />;
-    case 'reviewUpdate': return <ReviewUpdateForm review={state.review} mode={state.mode} onClose={onClose} />;
-    case 'delivery': return <ProgressForm assignment={state.assignment} onClose={onClose} />;
-    case 'progress': return <ProgressForm assignment={state.assignment} studentId={state.studentId} onClose={onClose} />;
+    case 'reviewUpdate': return <ReviewUpdateForm review={state.review} mode={state.mode} date={state.date} early={state.early} onClose={onClose} />;
+    case 'delivery': return <ProgressForm assignment={state.assignment} kind={state.kind} onClose={onClose} />;
+    case 'progress': return <ProgressForm assignment={state.assignment} studentId={state.studentId} kind={state.kind} onClose={onClose} />;
     case 'evaluate': return <EvaluationForm assignment={state.assignment} onClose={onClose} />;
+    case 'block': return <BlockForm assignment={state.assignment} mode={state.mode} onClose={onClose} />;
+    case 'pause': return <PauseForm student={state.student} kind={state.kind} onClose={onClose} />;
+    case 'resume': return <ResumeForm student={state.student} onClose={onClose} />;
   }
 }
 
@@ -124,6 +149,7 @@ function StudentForm({ student, onClose }: { student?: Student; onClose: () => v
   // Al registrar, el avatar ya viene elegido (el animal menos repetido); se puede cambiar antes de guardar.
   const [startDate, setStartDate] = useState(student ? student.startDate ?? '' : dateKey()); const [endDate, setEndDate] = useState(student?.endDate ?? ''); const [hoursRequired, setHoursRequired] = useState(student?.hoursRequired ? String(student.hoursRequired) : '');
   const [avatar, setAvatar] = useState<AnimalId>(() => student?.avatar ?? pickAnimal(workspace.students.map(s => s.avatar)));
+  const [pickAvatar, setPickAvatar] = useState(false);
   const { busy, error, setError, save, done } = useSave(onClose);
   const query = normalize(name.trim());
   const matches = !student && !done && query.length >= 2 ? workspace.students.filter(s => normalize(`${s.name} ${s.registration}`).includes(query) || (!!registration.trim() && normalize(s.registration) === normalize(registration.trim()))).slice(0, 4) : [];
@@ -148,6 +174,7 @@ function StudentForm({ student, onClose }: { student?: Student; onClose: () => v
           <button className="icon-button" type="button" aria-label="Elegir otro alumno" onClick={() => { setSelected(null); setError(''); }}><X size={16} /></button>
           <p>{selected.areaIds.includes(areaId) ? 'Ya está en tu área.' : 'Se incorporará a tu área. Sus actividades en otras áreas no cambian.'}</p>
         </div> : <>
+          <FormSection title="Quién es">
           <Field label="Nombre completo" required hint={!student ? 'Si ya existe en otra área, aparecerá abajo para incorporarlo sin duplicarlo.' : undefined}>
             <input autoFocus required maxLength={120} value={name} onChange={e => setName(e.target.value)} autoComplete="off" />
           </Field>
@@ -160,14 +187,17 @@ function StudentForm({ student, onClose }: { student?: Student; onClose: () => v
             </button>)}
           </div>}
           <div className="form-grid">
-            <Field label="Matrícula" required><input required maxLength={40} value={registration} onChange={e => setRegistration(e.target.value)} placeholder="A018273" autoComplete="off" /></Field>
+            <Field label="Matrícula" required><input required maxLength={40} value={registration} onChange={e => setRegistration(e.target.value)} placeholder="Ej. A018273" autoComplete="off" /></Field>
             <Field label="Correo electrónico"><input type="email" maxLength={254} value={email} onChange={e => setEmail(e.target.value)} /></Field>
             <Field label="Carrera"><input maxLength={160} value={career} onChange={e => setCareer(e.target.value)} /></Field>
             <Field label="Semestre"><input maxLength={40} value={semester} onChange={e => setSemester(e.target.value)} /></Field>
           </div>
-          <fieldset className="choices"><legend>Avatar</legend>
-            <div className="avatar-picks">{ANIMALS.map(id => <label className="avatar-pick" key={id} title={animalName(id)}><input type="radio" name="avatar" value={id} checked={avatar === id} onChange={() => setAvatar(id)} /><Avatar name={animalName(id)} avatar={id} size="lg" /><span className="sr-only">{animalName(id)}</span></label>)}</div>
+          <fieldset className="choices avatar-choice"><legend>Avatar <span className="muted">· así lo reconocerás en listas y calendario</span></legend>
+            {pickAvatar ? <div className="avatar-picks">{ANIMALS.map(id => <label className="avatar-pick" key={id} title={animalName(id)}><input type="radio" name="avatar" value={id} checked={avatar === id} onChange={() => { setAvatar(id); setPickAvatar(false); }} /><Avatar name={animalName(id)} avatar={id} size="lg" /><span className="sr-only">{animalName(id)}</span></label>)}</div>
+              : <div className="avatar-current"><Avatar name={animalName(avatar)} avatar={avatar} size="lg" /><span>{animalName(avatar)}{!student && <small>Elegido automáticamente: el menos repetido.</small>}</span><Button size="sm" variant="secondary" onClick={() => setPickAvatar(true)}>Cambiar</Button></div>}
           </fieldset>
+          </FormSection>
+          <FormSection title="Participación">
           <fieldset className="choices"><legend>Modalidad <span className="required" aria-hidden="true">*</span></legend>
             <div className="chips">{MODALITIES.map(m => <label className="chip-check" key={m}><input type="checkbox" checked={modalities.includes(m)} onChange={() => setModalities(old => old.includes(m) ? old.filter(v => v !== m) : [...old, m])} /><Check size={12} weight="bold" aria-hidden="true" />{m}</label>)}</div>
           </fieldset>
@@ -176,9 +206,10 @@ function StudentForm({ student, onClose }: { student?: Student; onClose: () => v
             <Field label="Término esperado" hint="Para ver si su plan cabe en su periodo."><input type="date" min={startDate || undefined} value={endDate} onChange={e => setEndDate(e.target.value)} /></Field>
             <Field label="Horas requeridas" hint="Servicio social o prácticas. Opcional."><input type="number" inputMode="numeric" min={1} max={5000} step={1} value={hoursRequired} onChange={e => setHoursRequired(e.target.value)} placeholder="Ej. 480" /></Field>
           </div>
-          <Field label="Tecnologías" hint="Separadas por comas. Son experiencia declarada, no calificaciones."><input maxLength={500} value={technologies} onChange={e => setTechnologies(e.target.value)} placeholder="Python, React, Figma" /></Field>
+          <Field label="Tecnologías" hint="Separadas por comas. Son experiencia declarada, no calificaciones."><input maxLength={500} value={technologies} onChange={e => setTechnologies(e.target.value)} placeholder="Ej. Python, React, Figma" /></Field>
+          </FormSection>
           {student && <Field label="Estado" hint={student.areaIds.length > 1 ? 'Está en varias áreas: el estado es compartido y no puede cambiarse desde una sola.' : undefined}>
-            <select disabled={student.areaIds.length > 1} value={status} onChange={e => setStatus(e.target.value as Student['status'])}><option value="active">Activo</option><option value="paused">En pausa</option><option value="completed">Terminó su participación</option></select>
+            <Segmented label="Estado del alumno" className="segmented-block" value={status} onChange={v => setStatus(v as Student['status'])} options={[{ value: 'active', label: 'Activo', disabled: student.areaIds.length > 1 }, { value: 'paused', label: 'En pausa', disabled: student.areaIds.length > 1 }, { value: 'completed', label: 'Terminó', disabled: student.areaIds.length > 1 }]} />
           </Field>}
         </>}
       </div>
@@ -189,12 +220,13 @@ function StudentForm({ student, onClose }: { student?: Student; onClose: () => v
 
 /* ---------- Actividad ---------- */
 
-function AssignmentForm({ studentId: initialStudentId, onClose }: { studentId?: string; onClose: () => void }) {
+function AssignmentForm({ studentId: initialStudentId, dueDate, draft, onClose }: { studentId?: string; dueDate?: string; draft?: ActivityDraft; onClose: () => void }) {
   const { workspace } = useApp(); const { busy, error, setError, save, done } = useSave(onClose);
-  const [studentId, setStudentId] = useState(initialStudentId ?? ''); const [title, setTitle] = useState(''); const [description, setDescription] = useState('');
-  const [dueAt, setDueAt] = useState(futureInput(7, '23:59')); const [firstReviewAt, setFirstReviewAt] = useState(futureInput(3)); const [skillIds, setSkillIds] = useState<string[]>([]);
-  const [startAt, setStartAt] = useState(dateKey()); const [phase, setPhase] = useState('');
-  const [linkDraft, setLinkDraft] = useState(''); const [links, setLinks] = useState<{ label: string; url: string }[]>([]);
+  const [studentId, setStudentId] = useState(initialStudentId ?? ''); const [title, setTitle] = useState(draft?.title ?? ''); const [description, setDescription] = useState(draft?.description ?? '');
+  const [keepDraft, setKeepDraft] = useState(true);
+  const [dueAt, setDueAt] = useState(dueDate ? `${dueDate}T23:59` : futureInput(7, '23:59')); const [firstReviewAt, setFirstReviewAt] = useState(futureInput(3)); const [skillIds, setSkillIds] = useState<string[]>(draft?.skillIds ?? []);
+  const [startAt, setStartAt] = useState(dateKey()); const [phase, setPhase] = useState(draft?.phase ?? '');
+  const [linkDraft, setLinkDraft] = useState(''); const [links, setLinks] = useState<{ label: string; url: string }[]>(draft?.links ?? []);
   const [files, setFiles] = useState<globalThis.File[]>([]); const fileInput = useRef<HTMLInputElement>(null);
   // Una habilidad creada aquí aparece al final, ya marcada, y recibe el foco.
   const [newSkill, setNewSkill] = useState(false); const [fresh, setFresh] = useState(''); const chips = useRef<HTMLDivElement>(null); const addChip = useRef<HTMLButtonElement>(null);
@@ -205,6 +237,7 @@ function AssignmentForm({ studentId: initialStudentId, onClose }: { studentId?: 
   const locked = initialStudentId ? workspace.students.find(s => s.id === initialStudentId) : undefined;
   function submit(e: FormEvent) {
     e.preventDefault();
+    if (!studentId) { setError('Elige para qué alumno es la actividad.'); return; }
     if (newSkill && skillDraft.dirty) { skillDraft.setError(UNFINISHED_SKILL); return; }
     if (!skillIds.length) { setError('Elige al menos una habilidad a evaluar.'); return; }
     // Un enlace pegado sin pulsar "Añadir" también se incluye: no se pierde lo que el usuario escribió.
@@ -223,6 +256,7 @@ function AssignmentForm({ studentId: initialStudentId, onClose }: { studentId?: 
         try { const data = new FormData(); data.append('kind', 'instruction'); data.append('file', file); await api(`/assignments/${created.assignment.id}/files`, { method: 'POST', body: data }); }
         catch { failed.push(file.name); }
       }
+      if (draft && !keepDraft) await del(`/drafts/${draft.id}`).catch(() => undefined);
       return { failed, ...created };
     }, ({ failed }) => failed.length ? [`Actividad asignada, pero no se ${failed.length === 1 ? 'subió' : 'subieron'}: ${failed.join(', ')}. Súbelos desde el detalle de la actividad.`, 'error'] : [done, 'success'], 'Asignada');
   }
@@ -240,32 +274,47 @@ function AssignmentForm({ studentId: initialStudentId, onClose }: { studentId?: 
   }
   const shortUrl = (url: string) => url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '');
   const quickDue = [{ label: '1 semana', days: 7 }, { label: '2 semanas', days: 14 }, { label: '1 mes', days: 30 }];
-  return <Modal wide title="Asignar actividad" onClose={() => !busy && onClose()}>
+  const pickedStudent = workspace.students.find(s => s.id === studentId);
+  const reviewDate = fromInput(firstReviewAt); const dueDateIso = fromInput(dueAt);
+  // Errores probables al planear: la primera revisión después de la fecha límite, o en el pasado.
+  const reviewAfterDue = !!reviewDate && !!dueDateIso && reviewDate > dueDateIso;
+  const reviewPast = !!reviewDate && Date.parse(reviewDate) < Date.now();
+  const summary = pickedStudent ? <>Para <strong>{firstName(pickedStudent.name)}</strong>{dueDateIso ? <> · vence <strong>{formatDate(dueDateIso, { weekday: 'short' })}</strong></> : ' · sin fecha límite'}{reviewDate && <> · 1.ª revisión <strong>{formatDate(reviewDate, { weekday: 'short' })}, {formatTime(reviewDate)}</strong></>}</> : 'Elige un alumno para continuar.';
+  return <Modal wide title="Asignar actividad" description="Qué debe hacer el alumno, cuándo lo entrega y cuándo lo revisas." onClose={() => !busy && onClose()}>
     <form onSubmit={submit}>
       <div className="dialog-body">
         <ErrorMessage message={error} />
-        {locked ? <LockedStudent student={locked} /> : students.length ? <Field label="Alumno" required><select required value={studentId} onChange={e => setStudentId(e.target.value)} autoFocus><option value="">Elige un alumno</option>{students.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></Field>
-          : <Notice tone="warn" icon={<WarningCircle size={18} weight="fill" />}><p>No tienes alumnos activos. Agrega uno antes de asignar actividades.</p></Notice>}
-        <Field label="Nombre de la actividad" required><input autoFocus={!!locked} required minLength={3} maxLength={180} value={title} onChange={e => setTitle(e.target.value)} placeholder="Ej. Implementar autenticación de usuarios" /></Field>
-        <Field label="Qué debe hacer y entregar" required><textarea required rows={3} maxLength={6000} value={description} onChange={e => setDescription(e.target.value)} /></Field>
-        <fieldset className="choices"><legend>Habilidades a evaluar <span className="required" aria-hidden="true">*</span></legend>
-          <div className="chips" ref={chips}>
-            {skills.map(s => <label className={`chip-check ${s.id === fresh ? 'is-new' : ''}`} key={s.id} title={s.description}><input type="checkbox" data-skill={s.id} checked={skillIds.includes(s.id)} onChange={() => setSkillIds(old => old.includes(s.id) ? old.filter(id => id !== s.id) : [...old, s.id])} /><Check size={12} weight="bold" aria-hidden="true" />{s.name}</label>)}
-            <button ref={addChip} type="button" className="chip-add" aria-expanded={newSkill} onClick={() => { if (newSkill) skillDraft.reset(); setNewSkill(!newSkill); }}><Plus size={13} weight="bold" aria-hidden="true" />Nueva habilidad</button>
+        <FormSection title="Para quién">
+          {locked ? <LockedStudent student={locked} /> : students.length ? <div className="field"><span className="field-label">Alumno <span className="required" aria-hidden="true">*</span></span><RichSelect label="Alumno" placeholder="Elige un alumno" autoFocus value={studentId} onChange={setStudentId} options={studentOptions(workspace, students)} invalid={!!error && !studentId} /></div>
+            : <Notice tone="warn" icon={<WarningCircle size={18} weight="fill" />}><p>No tienes alumnos activos. Agrega uno antes de asignar actividades.</p></Notice>}
+          <LoadNotice studentId={studentId} dueAt={dueAt} />
+          {draft && <label className="switch"><input type="checkbox" checked={keepDraft} onChange={e => setKeepDraft(e.target.checked)} /><span>Conservarla en el banco para asignarla a otros alumnos</span></label>}
+        </FormSection>
+        <FormSection title="Qué debe hacer">
+          <Field label="Nombre de la actividad" required><input autoFocus={!!locked} required minLength={3} maxLength={180} value={title} onChange={e => setTitle(e.target.value)} placeholder="Ej. Implementar autenticación de usuarios" /></Field>
+          <Field label="Qué debe hacer y entregar" required hint="El entregable y cómo sabrás que está terminado."><textarea required rows={3} maxLength={6000} value={description} onChange={e => setDescription(e.target.value)} placeholder="Ej. Pantalla de inicio de sesión con validación y pruebas; demostrarla en la revisión." /></Field>
+          <fieldset className="choices"><legend>Habilidades a evaluar <span className="required" aria-hidden="true">*</span> <span className="muted">· {skillIds.length ? plural(skillIds.length, 'elegida', 'elegidas') : 'elige al menos una'}</span></legend>
+            <div className="chips" ref={chips}>
+              {skills.map(s => <label className={`chip-check ${s.id === fresh ? 'is-new' : ''}`} key={s.id} title={s.description}><input type="checkbox" data-skill={s.id} checked={skillIds.includes(s.id)} onChange={() => setSkillIds(old => old.includes(s.id) ? old.filter(id => id !== s.id) : [...old, s.id])} /><Check size={12} weight="bold" aria-hidden="true" />{s.name}</label>)}
+              <button ref={addChip} type="button" className="chip-add" aria-expanded={newSkill} onClick={() => { if (newSkill) skillDraft.reset(); setNewSkill(!newSkill); }}><Plus size={13} weight="bold" aria-hidden="true" />Nueva habilidad</button>
+            </div>
+            {newSkill && <NewSkill draft={skillDraft} onCancel={() => { setNewSkill(false); addChip.current?.focus(); }} />}
+          </fieldset>
+        </FormSection>
+        <FormSection title="Cuándo">
+          <div className="form-grid">
+            <Field label="Fecha límite" hint={<span className="quick-dates">{quickDue.map(q => { const value = futureInput(q.days, '23:59'); return <button type="button" key={q.days} aria-pressed={dueAt === value} onClick={() => setDueAt(value)}>{q.label}</button>; })}<button type="button" aria-pressed={!dueAt} onClick={() => setDueAt('')}>Sin fecha</button></span>}>
+              <input type="datetime-local" value={dueAt} onChange={e => setDueAt(e.target.value)} />
+            </Field>
+            <Field label="Primera revisión" required hint="Tu cita para ver cómo va."><input type="datetime-local" required value={firstReviewAt} onChange={e => setFirstReviewAt(e.target.value)} /></Field>
           </div>
-          {newSkill && <NewSkill draft={skillDraft} onCancel={() => { setNewSkill(false); addChip.current?.focus(); }} />}
-        </fieldset>
-        <div className="form-grid">
-          <Field label="Inicio" hint="Cuándo empieza a trabajarla. Ubica la actividad en su plan."><input type="date" value={startAt} onChange={e => setStartAt(e.target.value)} /></Field>
-          <PhaseField value={phase} onChange={setPhase} studentId={studentId} />
-          <Field label="Fecha límite" hint={<span className="quick-dates">{quickDue.map(q => { const value = futureInput(q.days, '23:59'); return <button type="button" key={q.days} aria-pressed={dueAt === value} onClick={() => setDueAt(value)}>{q.label}</button>; })}<button type="button" aria-pressed={!dueAt} onClick={() => setDueAt('')}>Sin fecha</button></span>}>
-            <input type="datetime-local" value={dueAt} onChange={e => setDueAt(e.target.value)} />
-          </Field>
-          <Field label="Primera revisión" required hint="Tu cita de seguimiento con el alumno."><input type="datetime-local" required value={firstReviewAt} onChange={e => setFirstReviewAt(e.target.value)} /></Field>
-        </div>
-        <LoadNotice studentId={studentId} dueAt={dueAt} />
-        <fieldset className="material">
-          <legend>Material <span className="muted">(opcional)</span></legend>
+          {(reviewAfterDue || reviewPast) && <Notice tone="warn" icon={<WarningCircle size={18} weight="fill" />}><p>{reviewPast ? 'La primera revisión quedó en el pasado.' : 'La primera revisión es después de la fecha límite: no verás avances antes de que venza.'} Puedes guardarla así si es intencional.</p></Notice>}
+          <div className="form-grid">
+            <Field label="Inicio" hint="Cuándo empieza. Ubica la actividad en su plan."><input type="date" value={startAt} onChange={e => setStartAt(e.target.value)} /></Field>
+            <PhaseField value={phase} onChange={setPhase} studentId={studentId} />
+          </div>
+        </FormSection>
+        <FormSection title="Material" hint="Opcional. Carpeta de Drive, enunciado u otros documentos.">
           <div className="material-inputs">
             <div className="material-link-add">
               <LinkSimple size={16} aria-hidden="true" />
@@ -286,10 +335,10 @@ function AssignmentForm({ studentId: initialStudentId, onClose }: { studentId?: 
               <span className="material-text"><span className="material-title">{f.name}</span><small>{fileSize(f.size)}</small></span>
               <button type="button" className="icon-button" aria-label={`Quitar ${f.name}`} onClick={() => setFiles(old => old.filter((_, n) => n !== i))}><X size={14} /></button>
             </li>)}
-          </ul> : <small className="field-hint">Puedes añadir varios enlaces y documentos (PDF, imagen, texto u Office, hasta 10 MB cada uno).</small>}
-        </fieldset>
+          </ul> : <small className="field-hint">PDF, imagen, texto u Office, hasta 10 MB cada uno.</small>}
+        </FormSection>
       </div>
-      <Footer busy={busy} done={done} onClose={onClose} disabled={!locked && !students.length}>Asignar actividad</Footer>
+      <Footer busy={busy} done={done} onClose={onClose} disabled={!locked && !students.length} summary={summary}>Asignar actividad</Footer>
     </form>
   </Modal>;
 }
@@ -319,16 +368,17 @@ function LoadNotice({ studentId, dueAt }: { studentId: string; dueAt: string }) 
   </p></Notice>;
 }
 
-function AssignmentEditForm({ assignment, mode, onClose }: { assignment: Assignment; mode: 'edit' | 'cancel'; onClose: () => void }) {
+// Desde el calendario (arrastrar o «Mover actividad aquí») llega la nueva fecha ya puesta; se conserva la hora.
+function AssignmentEditForm({ assignment, mode, dueDate, onClose }: { assignment: Assignment; mode: 'edit' | 'cancel'; dueDate?: string; onClose: () => void }) {
   const { busy, error, save, done } = useSave(onClose);
   const [title, setTitle] = useState(assignment.title); const [description, setDescription] = useState(assignment.description);
-  const [dueAt, setDueAt] = useState(assignment.dueAt ? toInputDateTime(assignment.dueAt) : ''); const [blockedReason, setBlockedReason] = useState(assignment.blockedReason); const [reason, setReason] = useState('');
+  const [dueAt, setDueAt] = useState(dueDate ? `${dueDate}T${assignment.dueAt ? formatTime(assignment.dueAt) : '23:59'}` : assignment.dueAt ? toInputDateTime(assignment.dueAt) : ''); const [reason, setReason] = useState('');
   const [startAt, setStartAt] = useState(assignment.startAt ? toInputDate(assignment.startAt) : ''); const [phase, setPhase] = useState(assignment.phase ?? '');
   const dateChanged = fromInput(dueAt) !== assignment.dueAt;
   function submit(e: FormEvent) {
     e.preventDefault();
     if (mode === 'cancel') { save(() => patch(`/assignments/${assignment.id}`, { version: assignment.version, status: 'cancelled', changeReason: reason.trim() }), 'Actividad cancelada. Su historial se conserva.'); return; }
-    save(() => patch(`/assignments/${assignment.id}`, { version: assignment.version, title: title.trim(), description: description.trim(), blockedReason: blockedReason.trim(), dueAt: fromInput(dueAt), startAt: startAt ? fromInput(`${startAt}T09:00`) : null, phase: phase.trim(), changeReason: reason.trim() || undefined }), 'Actividad actualizada.');
+    save(() => patch(`/assignments/${assignment.id}`, { version: assignment.version, title: title.trim(), description: description.trim(), dueAt: fromInput(dueAt), startAt: startAt ? fromInput(`${startAt}T09:00`) : null, phase: phase.trim(), changeReason: reason.trim() || undefined }), 'Actividad actualizada.');
   }
   if (mode === 'cancel') return <Modal title="Cancelar actividad" description={assignment.title} onClose={() => !busy && onClose()}>
     <form onSubmit={submit}>
@@ -340,21 +390,231 @@ function AssignmentEditForm({ assignment, mode, onClose }: { assignment: Assignm
       <Footer busy={busy} done={done} onClose={onClose} cancelLabel="Volver" danger>Cancelar actividad</Footer>
     </form>
   </Modal>;
-  return <Modal wide title="Editar actividad" onClose={() => !busy && onClose()}>
+  const studentName = useApp().workspace.students.find(s => s.id === assignment.studentId)?.name ?? 'Alumno';
+  const summary = [dateChanged && (dueAt ? <>Fecha límite: <s>{assignment.dueAt ? formatDate(assignment.dueAt, { weekday: 'short' }) : 'sin fecha'}</s> → <strong>{formatDate(fromInput(dueAt)!, { weekday: 'short' })}, {formatTime(fromInput(dueAt)!)}</strong></> : <>Se quitará la fecha límite</>)].filter(Boolean);
+  return <Modal wide title="Editar actividad" description={`${studentName} · ${assignment.title}`} onClose={() => !busy && onClose()}>
     <form onSubmit={submit}>
       <div className="dialog-body">
         <ErrorMessage message={error} />
-        <Field label="Nombre de la actividad" required><input required minLength={3} maxLength={180} value={title} onChange={e => setTitle(e.target.value)} /></Field>
-        <Field label="Qué debe hacer y entregar"><textarea rows={3} maxLength={6000} value={description} onChange={e => setDescription(e.target.value)} /></Field>
-        <div className="form-grid">
-          <Field label="Inicio"><input type="date" value={startAt} onChange={e => setStartAt(e.target.value)} /></Field>
+        <FormSection title="Qué debe hacer">
+          <Field label="Nombre de la actividad" required><input required minLength={3} maxLength={180} value={title} onChange={e => setTitle(e.target.value)} /></Field>
+          <Field label="Qué debe hacer y entregar"><textarea rows={3} maxLength={6000} value={description} onChange={e => setDescription(e.target.value)} /></Field>
+        </FormSection>
+        <FormSection title="Fechas">
+          <div className="form-grid">
+            <Field label="Fecha límite" hint={assignment.dueAt ? `Actual: ${formatDate(assignment.dueAt, { weekday: 'short' })}, ${formatTime(assignment.dueAt)}` : 'Sin fecha límite'}><input type="datetime-local" value={dueAt} onChange={e => setDueAt(e.target.value)} data-autofocus={!!dueDate || undefined} /></Field>
+            <Field label="Inicio"><input type="date" value={startAt} onChange={e => setStartAt(e.target.value)} /></Field>
+          </div>
+          {dateChanged && <Field label="Motivo del cambio de fecha" required hint="Queda en el historial de la actividad."><input required maxLength={1000} value={reason} onChange={e => setReason(e.target.value)} placeholder="Ej. Se acordó más tiempo por falta de material" data-autofocus={!!dueDate || undefined} /></Field>}
           <PhaseField value={phase} onChange={setPhase} studentId={assignment.studentId} />
-        </div>
-        <Field label="Fecha límite"><input type="datetime-local" value={dueAt} onChange={e => setDueAt(e.target.value)} /></Field>
-        {dateChanged && <Field label="Motivo del cambio de fecha" required hint="Queda en el historial de la actividad."><input required maxLength={1000} value={reason} onChange={e => setReason(e.target.value)} autoFocus /></Field>}
-        <Field label="Impedimento" hint="Qué le impide avanzar al alumno y cuál es el siguiente paso. Bórralo cuando se resuelva."><textarea rows={2} maxLength={2000} value={blockedReason} onChange={e => setBlockedReason(e.target.value)} placeholder="Ej. Falta recibir el sensor para empezar las pruebas." /></Field>
+        </FormSection>
       </div>
-      <Footer busy={busy} done={done} onClose={onClose}>Guardar cambios</Footer>
+      <Footer busy={busy} done={done} onClose={onClose} summary={summary.length ? <>{summary.map((s, i) => <span key={i}>{i > 0 && ' · '}{s}</span>)}</> : undefined}>Guardar cambios</Footer>
+    </form>
+  </Modal>;
+}
+
+
+/* ---------- Impedimento: marcarlo, esperar y resolverlo ---------- */
+
+const BLOCK_PHRASES = ['Falta material o equipo', 'Espera una aprobación', 'Problema técnico sin resolver', 'Ausencia justificada'];
+const RESOLVE_PHRASES = ['Llegó el material', 'Se aprobó', 'Se resolvió el problema', 'Regresó y retoma'];
+const addDaysKey = (days: number, from = dateKey()) => dateKey(new Date(Date.parse(`${from}T12:00:00-06:00`) + days * DAY));
+/** Fecha para volver a revisar el impedimento: mientras no llegue, la actividad queda «en espera» y no pide atención. */
+function ReviewDateField({ value, onChange, label }: { value: string; onChange: (v: string) => void; label: string }) {
+  const quick = [{ label: 'Mañana', days: 1 }, { label: 'En 3 días', days: 3 }, { label: 'En una semana', days: 7 }, { label: 'En dos semanas', days: 14 }];
+  return <Field label={label} required hint={<><span className="quick-dates">{quick.map(q => { const v = addDaysKey(q.days); return <button type="button" key={q.days} aria-pressed={value === v} onClick={() => onChange(v)}>{q.label}</button>; })}</span><span className="block-hint">Hasta ese día queda en espera, en gris y fuera de tus pendientes.</span></>}>
+    <input type="date" required min={addDaysKey(1)} value={value} onChange={e => onChange(e.target.value)} />
+  </Field>;
+}
+/** mark: qué lo detiene y cuándo revisarlo. wait: sigue igual, otra fecha. resolve: cómo se destrabó y, si se quiere, recorrer la fecha límite lo que estuvo detenida. */
+function BlockForm({ assignment, mode, onClose }: { assignment: Assignment; mode: 'mark' | 'wait' | 'resolve'; onClose: () => void }) {
+  const { workspace } = useApp(); const { busy, error, setError, save, done } = useSave(onClose);
+  const student = workspace.students.find(s => s.id === assignment.studentId);
+  const updating = mode === 'mark' && !!assignment.blockedReason;
+  const [reason, setReason] = useState(updating ? assignment.blockedReason : ''); const [note, setNote] = useState('');
+  const [reviewAt, setReviewAt] = useState(assignment.blockedReviewAt && assignment.blockedReviewAt > dateKey() && mode !== 'wait' ? assignment.blockedReviewAt : addDaysKey(mode === 'wait' ? 3 : 3));
+  const since = assignment.blockedSince ?? assignment.updatedAt;
+  const daysBlocked = Math.max(0, -dayDiff(since));
+  // Al resolver se propone recorrer la fecha límite los días que estuvo detenida (el reloj estuvo parado).
+  const shifted = assignment.dueAt ? toInputDateTime(new Date(Date.parse(assignment.dueAt) + daysBlocked * DAY).toISOString()) : futureInput(7, '23:59');
+  const [moveDate, setMoveDate] = useState(mode === 'resolve' && !!assignment.dueAt && daysBlocked > 0);
+  const [dueAt, setDueAt] = useState(mode === 'resolve' ? shifted : assignment.dueAt ? toInputDateTime(assignment.dueAt) : futureInput(7, '23:59')); const [dateReason, setDateReason] = useState('');
+  const pick = (setter: (fn: (old: string) => string) => void, t: string) => setter(old => old.includes(t) ? old : `${old.trim()}${old.trim() && !/[.!?]$/.test(old.trim()) ? '.' : ''} ${t}.`.trim());
+  const reviewLabel = reviewAt ? formatDate(`${reviewAt}T12:00:00-06:00`, { weekday: 'short' }) : '';
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    if (mode === 'mark' && reason.trim().length < 3) { setError('Escribe qué le impide avanzar.'); return; }
+    if (mode !== 'resolve' && (!reviewAt || reviewAt <= dateKey())) { setError('Elige una fecha a partir de mañana para volver a revisarlo.'); return; }
+    const newDue = moveDate ? fromInput(dueAt) : undefined;
+    if (moveDate && newDue === assignment.dueAt) { setError('La fecha límite es la misma; cámbiala o desmarca la casilla.'); return; }
+    const dates = moveDate ? { dueAt: newDue, changeReason: dateReason.trim() || (mode === 'resolve' ? `Estuvo detenida ${plural(daysBlocked, 'día', 'días')} por un impedimento` : `Impedimento: ${reason.trim() || assignment.blockedReason}`) } : {};
+    const body = mode === 'resolve' ? { version: assignment.version, blockedReason: '', blockNote: note.trim() || undefined, ...dates }
+      : mode === 'wait' ? { version: assignment.version, blockedReviewAt: reviewAt, blockNote: note.trim() || undefined, ...dates }
+      : { version: assignment.version, blockedReason: reason.trim(), blockedReviewAt: reviewAt, blockNote: note.trim() || undefined, ...dates };
+    save(() => patch(`/assignments/${assignment.id}`, body),
+      mode === 'resolve' ? `Impedimento resuelto. ${firstName(student?.name)} ya puede avanzar.` : mode === 'wait' ? `Sigue en espera hasta el ${reviewLabel}.` : updating ? 'Impedimento actualizado.' : `En espera hasta el ${reviewLabel}. Ese día volverá a tus pendientes.`,
+      mode === 'resolve' ? 'Resuelto' : 'En espera');
+  }
+  const dueSummary = moveDate && fromInput(dueAt) ? <> · fecha límite <strong>{formatDate(fromInput(dueAt)!, { weekday: 'short' })}</strong></> : '';
+  const summary = mode === 'resolve' ? <>Se quitará el impedimento{dueSummary}</> : <>En espera hasta el <strong>{reviewLabel}</strong>; ese día vuelve a tus pendientes{dueSummary}</>;
+  const titles = { mark: updating ? 'Actualizar impedimento' : 'Marcar impedimento', wait: 'Esperar más', resolve: 'Resolver impedimento' };
+  return <Modal title={titles[mode]} description={`${student?.name ?? 'Alumno'} · ${assignment.title}`} onClose={() => !busy && onClose()}>
+    <form onSubmit={submit}>
+      <div className="dialog-body">
+        <ErrorMessage message={error} />
+        {mode !== 'mark' && <div className="block-current"><Barricade size={18} weight="bold" aria-hidden="true" /><div><strong>{assignment.blockedReason}</strong><small>Detenida {blockedSince(assignment)}{assignment.blockedReviewAt ? ` · revisión fijada para el ${formatDate(`${assignment.blockedReviewAt}T12:00:00-06:00`, { weekday: 'short' })}` : ''}</small></div></div>}
+        {mode === 'resolve' && <div className="field">
+          <label className="field-label" htmlFor="block-note">Cómo se resolvió</label>
+          <div className="quick-notes">{RESOLVE_PHRASES.map(t => <button type="button" key={t} aria-pressed={note.includes(t)} onClick={() => pick(setNote, t)}>{note.includes(t) && <Check size={12} weight="bold" aria-hidden="true" />}{t}</button>)}</div>
+          <textarea id="block-note" rows={2} maxLength={1000} value={note} onChange={e => setNote(e.target.value)} placeholder="Ej. Llegó el sensor y ya empezó las pruebas" autoFocus />
+          <small className="field-hint">Opcional, pero queda en el historial de la actividad.</small>
+        </div>}
+        {mode === 'wait' && <>
+          <ReviewDateField label="¿Hasta cuándo esperas?" value={reviewAt} onChange={setReviewAt} />
+          <Field label="Qué cambió o qué falta" hint="Opcional. Queda en el historial."><input autoFocus maxLength={1000} value={note} onChange={e => setNote(e.target.value)} placeholder="Ej. Compras confirmó entrega para el jueves" /></Field>
+        </>}
+        {mode === 'mark' && <>
+          <p className="dialog-text">Algo externo que no le deja avanzar y que tú no puedes resolver hoy. Mientras esperas, la actividad queda <strong>en espera</strong>: en gris, fuera de tus pendientes y sin contar como atrasada. El día que elijas vuelve para que decidas.</p>
+          <div className="field">
+            <label className="field-label" htmlFor="block-reason">Qué le impide avanzar <span className="required" aria-hidden="true">*</span></label>
+            <div className="quick-notes">{BLOCK_PHRASES.map(t => <button type="button" key={t} aria-pressed={reason.includes(t)} onClick={() => pick(setReason, t)}>{reason.includes(t) && <Check size={12} weight="bold" aria-hidden="true" />}{t}</button>)}</div>
+            <textarea id="block-reason" required rows={2} maxLength={2000} value={reason} onChange={e => setReason(e.target.value)} placeholder="Ej. Falta recibir el sensor para empezar las pruebas" autoFocus />
+          </div>
+          <ReviewDateField label="¿Cuándo vuelves a revisarlo?" value={reviewAt} onChange={setReviewAt} />
+          <Field label="Siguiente paso o quién lo destraba" hint="Opcional. Queda en el historial."><input maxLength={1000} value={note} onChange={e => setNote(e.target.value)} placeholder="Ej. Compras lo entrega el lunes" /></Field>
+        </>}
+        <div className="block-date">
+          <label className="switch"><input type="checkbox" checked={moveDate} onChange={e => setMoveDate(e.target.checked)} /><span>{mode === 'resolve' ? (daysBlocked > 0 && assignment.dueAt ? `Recorrer la fecha límite ${plural(daysBlocked, 'día', 'días')} (lo que estuvo detenida)` : 'Ajustar también la fecha límite') : 'Mover también la fecha límite'}</span></label>
+          <small className="field-hint">{assignment.dueAt ? `Ahora vence ${formatDate(assignment.dueAt, { weekday: 'short' })}, ${formatTime(assignment.dueAt)}.` : 'No tiene fecha límite.'}</small>
+          {moveDate && <div className="form-grid">
+            <Field label="Nueva fecha límite" required><input type="datetime-local" required value={dueAt} onChange={e => setDueAt(e.target.value)} /></Field>
+            <Field label="Motivo del cambio" hint="Si lo dejas vacío, se explica con el impedimento."><input maxLength={1000} value={dateReason} onChange={e => setDateReason(e.target.value)} placeholder="Ej. Se recorre por el retraso del material" /></Field>
+          </div>}
+        </div>
+      </div>
+      <Footer busy={busy} done={done} onClose={onClose} summary={summary}>{mode === 'resolve' ? 'Resolver impedimento' : mode === 'wait' ? 'Seguir esperando' : updating ? 'Guardar' : 'Marcar y esperar'}</Footer>
+    </form>
+  </Modal>;
+}
+
+/* ---------- Participación en pausa (por área) ---------- */
+
+const PAUSE_KINDS: { value: PauseKind; label: string; hint: string }[] = [
+  { value: 'temporary', label: 'Baja temporal', hint: 'Dejará de venir un tiempo y regresará.' },
+  { value: 'health', label: 'Salud o asunto personal', hint: 'Incapacidad, familia u otro motivo personal.' },
+  { value: 'exams', label: 'Exámenes o vacaciones', hint: 'Periodo de exámenes, viaje o receso.' },
+  { value: 'no_contact', label: 'Sin contacto', hint: 'Dejó de venir y no responde: posible deserción.' },
+];
+/** Pausar: sale de pendientes, salud y «sin seguimiento» de tu área; las otras áreas no cambian. */
+function PauseForm({ student, kind: initialKind, onClose }: { student: Student; kind?: PauseKind; onClose: () => void }) {
+  const { workspace } = useApp(); const { busy, error, setError, save, done } = useSave(onClose);
+  const areaId = workspace.user.areaId!; const current = student.pauses?.[areaId];
+  const [kind, setKind] = useState<PauseKind>(current?.kind ?? initialKind ?? 'temporary'); const [reason, setReason] = useState(current?.reason ?? '');
+  const [returnAt, setReturnAt] = useState(current?.returnAt ?? addDaysKey(14)); const [keep, setKeep] = useState<'keep' | 'cancel'>('keep'); const [cancelReviews, setCancelReviews] = useState(true);
+  const open = workspace.assignments.filter(a => a.studentId === student.id && a.areaId === areaId && isOpenAssignment(a));
+  const upcoming = workspace.reviews.filter(r => r.studentId === student.id && r.areaId === areaId && r.status === 'scheduled' && Date.parse(r.startsAt) >= Date.now());
+  const quick = [{ label: '1 semana', days: 7 }, { label: '2 semanas', days: 14 }, { label: '1 mes', days: 30 }];
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    if (returnAt && returnAt < dateKey()) { setError('La fecha de regreso no puede estar en el pasado.'); return; }
+    save(() => post(`/students/${student.id}/pause`, { kind, reason: reason.trim(), returnAt: returnAt || null, assignments: keep, cancelReviews }),
+      current ? 'Pausa actualizada.' : `${firstName(student.name)} quedó en pausa en tu área${returnAt ? `; el ${formatDate(`${returnAt}T12:00:00-06:00`, { weekday: 'short' })} te preguntaremos si retoma` : ''}.`, current ? 'Guardada' : 'En pausa');
+  }
+  const summary = <>Sale de tus pendientes{returnAt ? <> · regreso <strong>{formatDate(`${returnAt}T12:00:00-06:00`, { weekday: 'short' })}</strong></> : ' · sin fecha de regreso'}{!current && keep === 'cancel' && open.length ? <> · se cancelan <strong>{plural(open.length, 'actividad', 'actividades')}</strong></> : ''}</>;
+  return <Modal title={current ? 'Editar pausa' : 'Pausar participación'} description={`${student.name}${student.areaIds.length > 1 ? ' · solo en tu área; sus otras áreas no cambian' : ''}`} onClose={() => !busy && onClose()}>
+    <form onSubmit={submit}>
+      <div className="dialog-body">
+        <ErrorMessage message={error} />
+        <fieldset className="choices"><legend>Motivo</legend>
+          <div className="progress-kinds progress-kinds-2" role="radiogroup" aria-label="Motivo de la pausa">{PAUSE_KINDS.map(k => <label key={k.value} className={`progress-kind ${k.value === 'no_contact' ? 'kind-not_submitted' : ''}`}>
+            <input type="radio" name="pause-kind" value={k.value} checked={kind === k.value} onChange={() => setKind(k.value)} />
+            <span className="progress-kind-mark" aria-hidden="true" />
+            <span><strong>{k.label}</strong><small>{k.hint}</small></span>
+          </label>)}</div>
+        </fieldset>
+        <Field label="Detalle" hint="Opcional. Solo lo ves tú y el jefe."><input maxLength={1000} value={reason} onChange={e => setReason(e.target.value)} placeholder="Ej. Incapacidad por dos semanas" /></Field>
+        <Field label="Regreso esperado" hint={<span className="quick-dates">{quick.map(q => { const v = addDaysKey(q.days); return <button type="button" key={q.days} aria-pressed={returnAt === v} onClick={() => setReturnAt(v)}>{q.label}</button>; })}<button type="button" aria-pressed={!returnAt} onClick={() => setReturnAt('')}>Sin fecha</button></span>}>
+          <input type="date" min={dateKey()} value={returnAt} onChange={e => setReturnAt(e.target.value)} />
+        </Field>
+        {!current && open.length > 0 && <fieldset className="choices"><legend>{open.length === 1 ? 'Su actividad abierta' : `Sus ${open.length} actividades abiertas`}</legend>
+          <div className="progress-kinds progress-kinds-2" role="radiogroup" aria-label="Qué hacer con sus actividades">{([{ value: 'keep', label: 'Conservarlas', hint: 'Quedan abiertas y se retoman al volver; no cuentan como atrasadas.' }, { value: 'cancel', label: 'Cancelarlas', hint: 'Se cierran con su historial; al volver le asignas otras.' }] as const).map(k => <label key={k.value} className="progress-kind">
+            <input type="radio" name="pause-assignments" value={k.value} checked={keep === k.value} onChange={() => setKeep(k.value)} />
+            <span className="progress-kind-mark" aria-hidden="true" />
+            <span><strong>{k.label}</strong><small>{k.hint}</small></span>
+          </label>)}</div>
+        </fieldset>}
+        {!current && upcoming.length > 0 && keep === 'keep' && <label className="switch"><input type="checkbox" checked={cancelReviews} onChange={e => setCancelReviews(e.target.checked)} /><span>{upcoming.length === 1 ? 'Cancelar su revisión programada' : `Cancelar sus ${upcoming.length} revisiones programadas`}</span></label>}
+      </div>
+      <Footer busy={busy} done={done} onClose={onClose} summary={summary}>{current ? 'Guardar' : 'Pausar participación'}</Footer>
+    </form>
+  </Modal>;
+}
+/** Retomar: sale de la pausa y, opcionalmente, programa la primera revisión de regreso. */
+function ResumeForm({ student, onClose }: { student: Student; onClose: () => void }) {
+  const { workspace } = useApp(); const { busy, error, save, done } = useSave(onClose);
+  const pause = student.pauses?.[workspace.user.areaId!];
+  const [schedule, setSchedule] = useState(true); const [startsAt, setStartsAt] = useState(futureInput(1));
+  const open = workspace.assignments.filter(a => a.studentId === student.id && a.areaId === workspace.user.areaId && isOpenAssignment(a));
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    save(async () => {
+      const result = await post(`/students/${student.id}/resume`, {});
+      if (schedule) await post('/reviews', { studentId: student.id, assignmentId: currentAssignment(scoped(workspace), student.id)?.id ?? null, startsAt: fromInput(startsAt), durationMinutes: 30, type: 'follow_up', notes: 'Revisión de regreso tras la pausa.' });
+      return result;
+    }, `${firstName(student.name)} retoma su participación.${open.length ? '' : ' No tiene actividad: asígnale una.'}`, 'Retoma');
+  }
+  return <Modal title="Retomar participación" description={student.name} onClose={() => !busy && onClose()}>
+    <form onSubmit={submit}>
+      <div className="dialog-body">
+        <ErrorMessage message={error} />
+        {pause && <div className="block-current pause-current"><Pause size={18} weight="fill" aria-hidden="true" /><div><strong>{PAUSE_KINDS.find(k => k.value === pause.kind)?.label}{pause.reason ? ` · ${pause.reason}` : ''}</strong><small>En pausa desde el {formatDate(pause.since)}</small></div></div>}
+        <p className="dialog-text">{open.length ? `Sus ${plural(open.length, 'actividad abierta vuelve', 'actividades abiertas vuelven')} a contar desde hoy.` : 'No tiene actividades abiertas; al retomar aparecerá en «Sin actividad» para que le asignes una.'}</p>
+        <label className="switch"><input type="checkbox" checked={schedule} onChange={e => setSchedule(e.target.checked)} /><span>Programar una revisión de regreso</span></label>
+        {schedule && <Field label="Fecha y hora" required><input type="datetime-local" required value={startsAt} onChange={e => setStartsAt(e.target.value)} /></Field>}
+      </div>
+      <Footer busy={busy} done={done} onClose={onClose}>Retomar participación</Footer>
+    </form>
+  </Modal>;
+}
+
+/* ---------- Banco de actividades ---------- */
+
+/** Preparar una actividad sin alumno: se asigna después arrastrándola a alguien en el tablero. */
+function DraftForm({ draft, remove = false, onClose }: { draft?: ActivityDraft; remove?: boolean; onClose: () => void }) {
+  const { workspace } = useApp(); const { busy, error, setError, save, done } = useSave(onClose);
+  const [title, setTitle] = useState(draft?.title ?? ''); const [description, setDescription] = useState(draft?.description ?? '');
+  const [skillIds, setSkillIds] = useState<string[]>(draft?.skillIds ?? []); const [phase, setPhase] = useState(draft?.phase ?? '');
+  const [link, setLink] = useState(draft?.links[0]?.url ?? '');
+  const skills = workspace.skills.filter(s => !s.areaId || s.areaId === workspace.user.areaId);
+  if (remove && draft) return <Modal title="Quitar del banco" description={draft.title} onClose={() => !busy && onClose()}>
+    <form onSubmit={e => { e.preventDefault(); save(() => del(`/drafts/${draft.id}`), 'Se quitó del banco.', 'Quitada'); }}>
+      <div className="dialog-body"><p className="dialog-text">Solo se borra la actividad preparada. Las que ya asignaste con ella no cambian.</p></div>
+      <Footer busy={busy} done={done} onClose={onClose} cancelLabel="Volver" danger>Quitar del banco</Footer>
+    </form>
+  </Modal>;
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    const url = link.trim() ? toHttpUrl(link) : null;
+    if (link.trim() && !url) { setError('El enlace no es válido. Pégalo completo.'); return; }
+    const body = { title: title.trim(), description: description.trim(), skillIds, phase: phase.trim(), links: url ? [{ label: linkLabel(url), url }] : [] };
+    save(() => draft ? patch(`/drafts/${draft.id}`, { ...body, version: draft.version }) : post('/drafts', body), draft ? 'Actividad del banco actualizada.' : 'Lista en el banco. Arrástrala a un alumno para asignarla.', draft ? 'Guardada' : 'En el banco');
+  }
+  return <Modal wide title={draft ? 'Editar actividad del banco' : 'Nueva actividad en el banco'} description="Sin alumno ni fechas: las pones al asignarla." onClose={() => !busy && onClose()}>
+    <form onSubmit={submit}>
+      <div className="dialog-body">
+        <ErrorMessage message={error} />
+        <Field label="Nombre de la actividad" required><input required minLength={3} maxLength={180} value={title} onChange={e => setTitle(e.target.value)} placeholder="Ej. Prueba de carga del API" autoFocus /></Field>
+        <Field label="Qué debe hacer y entregar"><textarea rows={3} maxLength={6000} value={description} onChange={e => setDescription(e.target.value)} placeholder="Ej. Medir tiempos de respuesta con 100 usuarios y documentar los resultados." /></Field>
+        <fieldset className="choices"><legend>Habilidades a evaluar <span className="muted">· se pueden ajustar al asignar</span></legend>
+          <div className="chips">{skills.map(s => <label className="chip-check" key={s.id} title={s.description}><input type="checkbox" checked={skillIds.includes(s.id)} onChange={() => setSkillIds(old => old.includes(s.id) ? old.filter(id => id !== s.id) : [...old, s.id])} /><Check size={12} weight="bold" aria-hidden="true" />{s.name}</label>)}</div>
+        </fieldset>
+        <div className="form-grid">
+          <Field label="Fase" hint="Opcional."><input maxLength={80} value={phase} onChange={e => setPhase(e.target.value)} placeholder="Ej. Desarrollo" /></Field>
+          <Field label="Enlace del material" hint="Opcional. Carpeta de Drive o enunciado."><input type="text" inputMode="url" maxLength={2000} value={link} onChange={e => setLink(e.target.value)} placeholder="Ej. drive.google.com/…" /></Field>
+        </div>
+      </div>
+      <Footer busy={busy} done={done} onClose={onClose}>{draft ? 'Guardar cambios' : 'Guardar en el banco'}</Footer>
     </form>
   </Modal>;
 }
@@ -362,7 +622,7 @@ function AssignmentEditForm({ assignment, mode, onClose }: { assignment: Assignm
 /* ---------- Revisiones ---------- */
 
 function ReviewForm({ studentId: initialStudentId, assignmentId: initialAssignmentId, date, onClose }: { studentId?: string; assignmentId?: string; date?: string; onClose: () => void }) {
-  const { workspace } = useApp(); const { busy, error, save, done } = useSave(onClose);
+  const { workspace } = useApp(); const { busy, error, setError, save, done } = useSave(onClose);
   const lockedAssignment = initialAssignmentId ? workspace.assignments.find(a => a.id === initialAssignmentId) : undefined;
   const lockedStudentId = initialStudentId ?? lockedAssignment?.studentId;
   // Desde un alumno se propone su actividad abierta más urgente; se puede cambiar.
@@ -376,36 +636,52 @@ function ReviewForm({ studentId: initialStudentId, assignmentId: initialAssignme
   const clash = Number.isNaN(start) ? undefined : workspace.reviews.find(r => r.status === 'scheduled' && r.areaId === workspace.user.areaId && Date.parse(r.startsAt) < end && Date.parse(r.startsAt) + r.durationMinutes * 60000 > start);
   function submit(e: FormEvent) {
     e.preventDefault();
+    if (!studentId) { setError('Elige con qué alumno es la revisión.'); return; }
     const when = fromInput(startsAt);
     save(() => post('/reviews', { studentId, assignmentId: assignmentId || null, startsAt: when, durationMinutes: Number(duration), type, notes: notes.trim() }), `Revisión con ${firstName(student?.name)} programada ${when ? `${relativeDay(when)} a las ${formatTime(when)}` : ''}.`, 'Programada');
   }
-  return <Modal title="Programar revisión" onClose={() => !busy && onClose()}>
+  const TYPES = [{ value: 'follow_up' as const, label: 'Seguimiento', hint: 'Ver cómo va y acordar los siguientes pasos.' }, { value: 'delivery' as const, label: 'Entrega', hint: 'Recibir lo que entrega; después registras la entrega.' }, { value: 'evaluation' as const, label: 'Evaluación', hint: 'Calificar las habilidades de una entrega ya registrada.' }];
+  const when = fromInput(startsAt);
+  const summary = student && when ? <>Con <strong>{firstName(student.name)}</strong> · <strong>{formatDate(when, { weekday: 'short' })}, {formatTime(when)}–{formatTime(new Date(Date.parse(when) + Number(duration) * 60000).toISOString())}</strong></> : 'Elige el alumno y la fecha.';
+  return <Modal title="Programar revisión" description="Una cita con el alumno; aparece en tu calendario y en Hoy." onClose={() => !busy && onClose()}>
     <form onSubmit={submit}>
       <div className="dialog-body">
         <ErrorMessage message={error} />
-        {lockedStudentId ? <LockedStudent student={workspace.students.find(s => s.id === lockedStudentId)} />
-          : <Field label="Alumno" required><select required autoFocus value={studentId} onChange={e => { setStudentId(e.target.value); setAssignmentId(''); }}><option value="">Elige un alumno</option>{students.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></Field>}
-        {lockedAssignment ? <Locked label="Actividad"><strong>{lockedAssignment.title}</strong></Locked>
-          : studentId && <Field label="Actividad"><select value={assignmentId} onChange={e => setAssignmentId(e.target.value)}><option value="">Ninguna, seguimiento general</option>{assignments.map(a => <option key={a.id} value={a.id}>{a.title}</option>)}</select></Field>}
-        <div className="form-grid form-grid-date">
-          <Field label="Fecha y hora" required><input type="datetime-local" required value={startsAt} onChange={e => setStartsAt(e.target.value)} autoFocus={!!lockedStudentId} /></Field>
-          <div className="field"><span className="field-label">Duración (min)</span><Segmented label="Duración en minutos" value={duration} onChange={setDuration} className="segmented-block" options={['15', '30', '45', '60'].map(v => ({ value: v, label: v }))} /></div>
-        </div>
-        {clash && <Notice tone="warn" icon={<WarningCircle size={18} weight="fill" />}><p>Choca con tu revisión de las {formatTime(clash.startsAt)} con {workspace.students.find(s => s.id === clash.studentId)?.name ?? 'otro alumno'}. Puedes guardarla de todos modos.</p></Notice>}
-        <div className="field"><span className="field-label">Tipo</span><Segmented label="Tipo de revisión" value={type} onChange={setType} options={[{ value: 'follow_up', label: 'Seguimiento' }, { value: 'delivery', label: 'Entrega' }, { value: 'evaluation', label: 'Evaluación' }]} /></div>
-        <Field label="Temas a revisar"><textarea rows={2} maxLength={4000} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Opcional" /></Field>
+        <FormSection title="Con quién">
+          {lockedStudentId ? <LockedStudent student={workspace.students.find(s => s.id === lockedStudentId)} />
+            : <div className="field"><span className="field-label">Alumno <span className="required" aria-hidden="true">*</span></span><RichSelect label="Alumno" placeholder="Elige un alumno" autoFocus value={studentId} onChange={v => { setStudentId(v); setAssignmentId(currentAssignment(scoped(workspace), v)?.id ?? ''); }} options={studentOptions(workspace, students)} invalid={!!error && !studentId} /></div>}
+          {lockedAssignment ? <Locked label="Actividad"><strong>{lockedAssignment.title}</strong></Locked>
+            : studentId && <div className="field"><span className="field-label">Sobre qué actividad</span><RichSelect label="Actividad" placeholder="Ninguna, seguimiento general" value={assignmentId} onChange={setAssignmentId} options={[{ value: '', label: 'Ninguna, seguimiento general', sub: 'Una plática sin actividad en particular' }, ...activityOptions(assignments, workspace)]} /></div>}
+        </FormSection>
+        <FormSection title="Cuándo">
+          <div className="form-grid form-grid-date">
+            <Field label="Fecha y hora" required><input type="datetime-local" required value={startsAt} onChange={e => setStartsAt(e.target.value)} autoFocus={!!lockedStudentId} /></Field>
+            <div className="field"><span className="field-label">Duración (min)</span><Segmented label="Duración en minutos" value={duration} onChange={setDuration} className="segmented-block" options={['15', '30', '45', '60'].map(v => ({ value: v, label: v }))} /></div>
+          </div>
+          {clash && <Notice tone="warn" icon={<WarningCircle size={18} weight="fill" />}><p>Choca con tu revisión de las {formatTime(clash.startsAt)} con {workspace.students.find(s => s.id === clash.studentId)?.name ?? 'otro alumno'}. Puedes guardarla de todos modos.</p></Notice>}
+          {when && Date.parse(when) < Date.now() && <Notice tone="warn" icon={<WarningCircle size={18} weight="fill" />}><p>La fecha ya pasó. Si la revisión ya ocurrió, prográmala y regístrala enseguida.</p></Notice>}
+        </FormSection>
+        <FormSection title="Para qué">
+          <div className="field"><span className="field-label">Tipo</span><Segmented label="Tipo de revisión" className="segmented-block" value={type} onChange={setType} options={TYPES.map(t => ({ value: t.value, label: t.label }))} /><small className="field-hint">{TYPES.find(t => t.value === type)!.hint}</small></div>
+          <Field label="Temas a revisar" hint="Opcional. Los verás al registrar la revisión."><textarea rows={2} maxLength={4000} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Ej. Revisar pruebas y el diagrama de la base de datos" /></Field>
+        </FormSection>
       </div>
-      <Footer busy={busy} done={done} onClose={onClose}>Programar revisión</Footer>
+      <Footer busy={busy} done={done} onClose={onClose} summary={summary}>Programar revisión</Footer>
     </form>
   </Modal>;
 }
 
-function ReviewUpdateForm({ review, mode: initialMode, onClose }: { review: Review; mode: 'record' | 'reschedule' | 'cancel'; onClose: () => void }) {
-  const { workspace } = useApp(); const { busy, error, save, done } = useSave(onClose);
+// «Mañana», «Hoy» y «Ayer» van en minúscula a mitad de frase.
+const inSentence = (label: string) => label.replace(/^(Hoy|Mañana|Ayer)/, m => m.toLowerCase());
+// `early`: el alumno se adelantó; la revisión se registra ahora y su fecha pasa a este momento, con el motivo en el historial.
+function ReviewUpdateForm({ review, mode: initialMode, date, early = false, onClose }: { review: Review; mode: 'record' | 'reschedule' | 'cancel'; date?: string; early?: boolean; onClose: () => void }) {
+  const { workspace } = useApp(); const { busy, error, setError, save, done } = useSave(onClose);
   const [outcomeKind, setOutcomeKind] = useState<'completed' | 'missed'>('completed');
-  const [text, setText] = useState(''); const [startsAt, setStartsAt] = useState(toInputDateTime(review.startsAt));
+  const [text, setText] = useState(''); const [startsAt, setStartsAt] = useState(date ? `${date}T${formatTime(review.startsAt)}` : toInputDateTime(review.startsAt));
   const student = workspace.students.find(s => s.id === review.studentId);
   const [hours, setHours] = useState(''); const [agreements, setAgreements] = useState<string[]>([]); const [draft, setDraft] = useState('');
+  const reviewAssignment = workspace.assignments.find(a => a.id === review.assignmentId);
+  const [blockOn, setBlockOn] = useState(false); const [blockReason, setBlockReason] = useState('');
   const carried = previousWithPending(workspace, review);
   const addAgreement = () => { const t = draft.trim(); if (t && !agreements.includes(t) && agreements.length < 30) setAgreements(old => [...old, t]); setDraft(''); };
   const context = `${student?.name ?? 'Alumno'} · ${reviewTitle(review, workspace)} · ${dayLabel(review.startsAt)}, ${formatTime(review.startsAt)}`;
@@ -416,26 +692,52 @@ function ReviewUpdateForm({ review, mode: initialMode, onClose }: { review: Revi
     if (initialMode === 'cancel') { save(() => patch(`/reviews/${review.id}`, { ...base, status: 'cancelled', outcome: text.trim(), changeReason: text.trim() }), 'Revisión cancelada.'); return; }
     const pending = draft.trim() && !agreements.includes(draft.trim()) ? [...agreements, draft.trim()] : agreements;
     const extra = outcomeKind === 'completed' ? { hours: hours ? Number(hours) : null, agreements: pending.map(t => ({ text: t, done: false })) } : {};
-    save(() => patch(`/reviews/${review.id}`, { ...base, status: outcomeKind, outcome: text.trim(), changeReason: outcomeKind === 'completed' ? undefined : text.trim(), ...extra }), outcomeKind === 'completed' ? 'Revisión registrada.' : 'Se registró que la revisión no se realizó.', 'Registrada');
+    const moved = early ? { startsAt: new Date().toISOString(), changeReason: `Se adelantó: estaba programada para ${inSentence(dayLabel(review.startsAt))}, ${formatTime(review.startsAt)}.` } : {};
+    if (blockOn && blockReason.trim().length < 3) { setError('Escribe qué le impide avanzar o desmarca la casilla.'); return; }
+    save(async () => {
+      const result = await patch(`/reviews/${review.id}`, { ...base, status: outcomeKind, outcome: text.trim(), changeReason: outcomeKind === 'completed' ? undefined : text.trim(), ...extra, ...moved });
+      if (blockOn && reviewAssignment) await patch(`/assignments/${reviewAssignment.id}`, { version: reviewAssignment.version, blockedReason: blockReason.trim(), blockNote: 'Anotado al registrar la revisión' });
+      return result;
+    }, `${outcomeKind === 'completed' ? 'Revisión registrada.' : 'Se registró que la revisión no se realizó.'}${blockOn ? ' La actividad quedó con impedimento.' : ''}`, 'Registrada');
   }
   const titles = { record: 'Registrar revisión', reschedule: 'Reprogramar revisión', cancel: 'Cancelar revisión' };
-  return <Modal title={titles[initialMode]} description={context} onClose={() => !busy && onClose()}>
+  const QUICK_RESULT = ['Mostró avances', 'Resolvimos dudas', 'Revisamos el código', 'Acordamos siguientes pasos'];
+  const addResult = (t: string) => setText(old => old.includes(t) ? old : `${old.trim()}${old.trim() && !/[.!?]$/.test(old.trim()) ? '.' : ''} ${t}.`.trim());
+  const newWhen = fromInput(startsAt);
+  const summary = initialMode === 'reschedule' && newWhen ? <><s>{formatDate(review.startsAt, { weekday: 'short' })}, {formatTime(review.startsAt)}</s> → <strong>{formatDate(newWhen, { weekday: 'short' })}, {formatTime(newWhen)}</strong></>
+    : initialMode === 'record' && outcomeKind === 'completed' ? <>Se registrará como realizada{agreements.length || draft.trim() ? <> con <strong>{plural(agreements.length + (draft.trim() && !agreements.includes(draft.trim()) ? 1 : 0), 'acuerdo nuevo', 'acuerdos nuevos')}</strong></> : ''}</>
+    : initialMode === 'record' ? 'Se registrará que no se realizó; no cuenta como seguimiento.' : undefined;
+  return <Modal title={early ? 'Registrar revisión adelantada' : titles[initialMode]} description={context} onClose={() => !busy && onClose()}>
     <form onSubmit={submit}>
       <div className="dialog-body">
         <ErrorMessage message={error} />
-        {initialMode === 'record' && <div className="field"><span className="field-label">¿Se realizó?</span><Segmented label="¿Se realizó la revisión?" value={outcomeKind} onChange={setOutcomeKind} options={[{ value: 'completed', label: 'Sí, se realizó' }, { value: 'missed', label: 'No se realizó' }]} /></div>}
-        {initialMode === 'reschedule' && <Field label="Nueva fecha y hora" required><input type="datetime-local" required value={startsAt} onChange={e => setStartsAt(e.target.value)} autoFocus /></Field>}
-        {initialMode === 'record' && carried && <AgreementList review={carried} title={pendingTitle(carried)} editable />}
-        <Field label={initialMode === 'record' && outcomeKind === 'completed' ? 'Resultado' : 'Motivo'} required><textarea required rows={3} maxLength={4000} value={text} onChange={e => setText(e.target.value)} autoFocus={initialMode !== 'reschedule'} /></Field>
+        {early && <Notice tone="info" icon={<Clock size={18} weight="fill" />}><p>Estaba programada para {inSentence(dayLabel(review.startsAt))}, {formatTime(review.startsAt)}. Se registrará como realizada ahora y el cambio de fecha queda en el historial.</p></Notice>}
+        {initialMode === 'record' && !early && <fieldset className="choices"><legend>¿Se realizó?</legend>
+          <div className="progress-kinds progress-kinds-2" role="radiogroup" aria-label="¿Se realizó la revisión?">{([{ value: 'completed', label: 'Sí, se realizó', hint: 'Anota qué se vio y los acuerdos.' }, { value: 'missed', label: 'No se realizó', hint: 'No se presentó o se suspendió.' }] as const).map(k => <label key={k.value} className={`progress-kind kind-${k.value === 'missed' ? 'not_submitted' : 'complete'}`}>
+            <input type="radio" name="review-outcome" value={k.value} checked={outcomeKind === k.value} onChange={() => setOutcomeKind(k.value)} />
+            <span className="progress-kind-mark" aria-hidden="true" />
+            <span><strong>{k.label}</strong><small>{k.hint}</small></span>
+          </label>)}</div>
+        </fieldset>}
+        {initialMode === 'reschedule' && <Field label="Nueva fecha y hora" required hint={`Ahora: ${formatDate(review.startsAt, { weekday: 'short' })}, ${formatTime(review.startsAt)}`}><input type="datetime-local" required value={startsAt} onChange={e => setStartsAt(e.target.value)} autoFocus /></Field>}
+        {initialMode === 'record' && outcomeKind === 'completed' && carried && <div className="carried"><AgreementList review={carried} title={pendingTitle(carried)} editable /><small className="field-hint">Marca los que ya cumplió; los demás pasan a la siguiente cita.</small></div>}
+        <div className="field">
+          <label className="field-label" htmlFor="review-text">{initialMode === 'record' && outcomeKind === 'completed' ? 'Qué se vio en la revisión' : initialMode === 'reschedule' ? 'Motivo del cambio' : 'Motivo'} <span className="required" aria-hidden="true">*</span></label>
+          {initialMode === 'record' && outcomeKind === 'completed' && <div className="quick-notes">{QUICK_RESULT.map(t => <button type="button" key={t} aria-pressed={text.includes(t)} onClick={() => addResult(t)}>{text.includes(t) && <Check size={12} weight="bold" aria-hidden="true" />}{t}</button>)}</div>}
+          <textarea id="review-text" required rows={3} maxLength={4000} value={text} onChange={e => setText(e.target.value)} autoFocus={initialMode !== 'reschedule'} placeholder={initialMode === 'record' && outcomeKind === 'completed' ? 'Ej. Mostró el registro de usuarios funcionando; faltan pruebas.' : initialMode === 'reschedule' ? 'Ej. El alumno tiene examen ese día' : 'Ej. No se presentó y no avisó'} />
+          {initialMode !== 'record' || outcomeKind === 'missed' ? <small className="field-hint">Queda en el historial.</small> : null}
+        </div>
         {initialMode === 'record' && outcomeKind === 'completed' && <>
-          <fieldset className="choices"><legend>Acuerdos <span className="muted">(se revisan en la siguiente cita)</span></legend>
+          <fieldset className="choices"><legend>Acuerdos nuevos <span className="muted">· se revisan en la siguiente cita</span></legend>
             {agreements.length > 0 && <ul className="agreement-drafts">{agreements.map(a => <li key={a}><span>{a}</span><button type="button" className="icon-button" aria-label={`Quitar acuerdo: ${a}`} onClick={() => setAgreements(old => old.filter(x => x !== a))}><X size={14} /></button></li>)}</ul>}
             <div className="agreement-add"><input aria-label="Nuevo acuerdo" maxLength={500} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addAgreement(); } }} placeholder="Ej. Agregar pruebas al registro de usuarios" /><Button variant="secondary" size="sm" disabled={!draft.trim()} onClick={addAgreement}><Plus size={14} weight="bold" />Añadir</Button></div>
+            <small className="field-hint">Enter para añadir otro. Lo que quede escrito también se guarda.</small>
           </fieldset>
-          {student?.hoursRequired ? <Field label="Horas trabajadas" hint={`Se suman a sus ${student.hoursRequired} h requeridas.`}><input type="number" inputMode="decimal" min={0} max={500} step={0.5} value={hours} onChange={e => setHours(e.target.value)} placeholder="Ej. 12" /></Field> : null}
+          {reviewAssignment && !reviewAssignment.blockedReason && <BlockCheck on={blockOn} setOn={setBlockOn} reason={blockReason} setReason={setBlockReason} />}
+          {student?.hoursRequired ? <Field label="Horas trabajadas desde la última revisión" hint={`Opcional. Se suman a sus ${student.hoursRequired} h requeridas.`}><input type="number" inputMode="decimal" min={0} max={500} step={0.5} value={hours} onChange={e => setHours(e.target.value)} placeholder="Ej. 12" /></Field> : null}
         </>}
       </div>
-      <Footer busy={busy} done={done} onClose={onClose} cancelLabel="Volver" danger={initialMode === 'cancel'}>{initialMode === 'reschedule' ? 'Reprogramar' : initialMode === 'cancel' ? 'Cancelar revisión' : 'Guardar'}</Footer>
+      <Footer busy={busy} done={done} onClose={onClose} cancelLabel={initialMode === 'cancel' ? 'Volver' : 'Cancelar'} danger={initialMode === 'cancel'} summary={summary}>{initialMode === 'reschedule' ? 'Reprogramar' : initialMode === 'cancel' ? 'Cancelar revisión' : outcomeKind === 'completed' ? 'Registrar revisión' : 'Registrar que no se realizó'}</Footer>
     </form>
   </Modal>;
 }
@@ -505,7 +807,7 @@ const QUICK_PROGRESS: Record<ProgressKind, string[]> = {
  * Un solo formulario para registrar lo que presentó el alumno: un avance (con porcentaje estimado), la entrega final
  * o que no entregó. Se abre desde el alumno, la actividad, Hoy o «Nuevo»; si no se sabe la actividad, se elige aquí.
  */
-function ProgressForm({ assignment: given, studentId: givenStudent, onClose }: { assignment?: Assignment; studentId?: string; onClose: () => void }) {
+function ProgressForm({ assignment: given, studentId: givenStudent, kind: givenKind, onClose }: { assignment?: Assignment; studentId?: string; kind?: 'partial' | 'complete'; onClose: () => void }) {
   const app = useApp(); const { workspace } = app; const { busy, error, setError, save, done } = useSave(onClose);
   const own = scoped(workspace);
   const students = own.students.filter(s => s.status === 'active' && own.assignments.some(a => a.studentId === s.id && isOpenAssignment(a))).sort((a, b) => a.name.localeCompare(b.name));
@@ -516,11 +818,12 @@ function ProgressForm({ assignment: given, studentId: givenStudent, onClose }: {
   const student = workspace.students.find(s => s.id === (assignment?.studentId ?? studentId));
   const late = !!assignment?.dueAt && new Date(assignment.dueAt) < new Date() && !workspace.deliveries.some(d => d.assignmentId === assignment.id && d.completeness === 'complete');
   const previous = assignment ? assignmentProgress(assignment, workspace) : null;
-  const [kind, setKind] = useState<ProgressKind>(given?.status === 'changes_requested' ? 'complete' : 'partial');
+  const [kind, setKind] = useState<ProgressKind>(givenKind ?? (given?.status === 'changes_requested' ? 'complete' : 'partial'));
   const [progress, setProgress] = useState<number | null>(previous !== null && previous < 100 ? Math.min(90, previous + 25) : 50);
   const [summary, setSummary] = useState(''); const [url, setUrl] = useState(''); const [hours, setHours] = useState('');
   const [receivedAt, setReceivedAt] = useState(toInputDateTime(new Date().toISOString())); const [editDate, setEditDate] = useState(false);
   const [evaluateNow, setEvaluateNow] = useState(true);
+  const [blockOn, setBlockOn] = useState(false); const [blockReason, setBlockReason] = useState('');
   const none = kind === 'not_submitted';
   const kinds = PROGRESS_KINDS.filter(k => k.value !== 'not_submitted' || late);
   function pickStudent(id: string) { setStudentId(id); setAssignmentId(currentAssignment(own, id)?.id ?? ''); }
@@ -532,8 +835,13 @@ function ProgressForm({ assignment: given, studentId: givenStudent, onClose }: {
     if (!none && url.trim() && !toHttpUrl(url)) { setError('El enlace no es válido. Pégalo completo.'); return; }
     const who = firstName(student?.name);
     const body = { version: assignment.version, receivedAt: fromInput(receivedAt), summary: summary.trim(), url: none ? '' : url.trim() ? toHttpUrl(url) : '', completeness: kind, hours: !none && hours ? Number(hours) : null, progress: kind === 'partial' ? progress : kind === 'complete' ? 100 : null };
+    if (blockOn && blockReason.trim().length < 3) { setError('Escribe qué le impide avanzar o desmarca la casilla.'); return; }
     const chain = kind === 'complete' && evaluateNow;
-    save(() => post<{ assignment: Assignment }>(`/assignments/${assignment.id}/deliveries`, body),
+    save(async () => {
+      const result = await post<{ assignment: Assignment }>(`/assignments/${assignment.id}/deliveries`, body);
+      if (blockOn && kind === 'partial') return { assignment: (await patch<{ assignment: Assignment }>(`/assignments/${assignment.id}`, { version: result.assignment.version, blockedReason: blockReason.trim(), blockNote: 'Anotado al registrar el avance' })).assignment };
+      return result;
+    },
       kind === 'complete' ? (chain ? `Entrega de ${who} registrada. Ahora evalúala.` : `Entrega de ${who} registrada. Ya puedes evaluarla.`) : kind === 'partial' ? `Avance de ${who} registrado${progress !== null ? ` (${progress} %)` : ''}.` : `Se registró que ${who} no entregó.`,
       kind === 'partial' ? 'Avance registrado' : 'Registrada',
       chain ? result => app.modal({ type: 'evaluate', assignment: result.assignment }) : undefined);
@@ -543,8 +851,8 @@ function ProgressForm({ assignment: given, studentId: givenStudent, onClose }: {
     <form onSubmit={submit}>
       <div className="dialog-body">
         <ErrorMessage message={error} />
-        {!given && (givenStudent ? <LockedStudent student={student} /> : <Field label="Alumno" required><select required autoFocus value={studentId} onChange={e => pickStudent(e.target.value)}><option value="">Elige un alumno</option>{students.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></Field>)}
-        {!given && studentId && (open.length > 1 ? <Field label="Actividad" required><select required value={assignmentId} onChange={e => setAssignmentId(e.target.value)}>{open.map(a => <option key={a.id} value={a.id}>{a.title}</option>)}</select></Field>
+        {!given && (givenStudent ? <LockedStudent student={student} /> : <div className="field"><span className="field-label">Alumno <span className="required" aria-hidden="true">*</span></span><RichSelect label="Alumno" placeholder="Elige un alumno" autoFocus value={studentId} onChange={pickStudent} options={studentOptions(workspace, students)} empty="Ningún alumno tiene actividades abiertas." /></div>)}
+        {!given && studentId && (open.length > 1 ? <div className="field"><span className="field-label">Actividad <span className="required" aria-hidden="true">*</span></span><RichSelect label="Actividad" placeholder="Elige la actividad" value={assignmentId} onChange={setAssignmentId} options={activityOptions(open, workspace)} /></div>
           : open.length === 1 ? <Locked label="Actividad"><strong>{open[0].title}</strong></Locked>
           : <Notice tone="warn" icon={<WarningCircle size={18} weight="fill" />}><p>No tiene actividades abiertas en tu área. Asígnale una primero.</p></Notice>)}
         {assignment && <>
@@ -573,6 +881,7 @@ function ProgressForm({ assignment: given, studentId: givenStudent, onClose }: {
           </div>}
           {editDate ? <Field label={none ? 'Fecha de confirmación' : 'Fecha y hora en que lo presentó'} required><input type="datetime-local" required value={receivedAt} onChange={e => setReceivedAt(e.target.value)} autoFocus /></Field>
             : <p className="progress-when">Se registra con fecha de {dayLabel(fromInput(receivedAt) ?? new Date().toISOString()).toLowerCase()}, {formatTime(fromInput(receivedAt) ?? new Date().toISOString())}. <button type="button" className="text-link" onClick={() => setEditDate(true)}>Cambiar fecha</button></p>}
+          {kind === 'partial' && !assignment.blockedReason && <BlockCheck on={blockOn} setOn={setBlockOn} reason={blockReason} setReason={setBlockReason} />}
           {kind === 'complete' && <label className="switch"><input type="checkbox" checked={evaluateNow} onChange={e => setEvaluateNow(e.target.checked)} /><span>Evaluar ahora, al guardar</span></label>}
         </>}
       </div>
@@ -634,7 +943,8 @@ function RatingBar({ value, onChange, label }: { value: number | null; onChange:
 
 interface ScoreRow { skillId: string; score: number | null; notes: string[]; text: string; writing: boolean; added: boolean }
 function EvaluationForm({ assignment, onClose }: { assignment: Assignment; onClose: () => void }) {
-  const { workspace } = useApp(); const { busy, error, setError, save, done } = useSave(onClose);
+  const { workspace, modal } = useApp();
+  const lastOpen = !workspace.assignments.some(a => a.id !== assignment.id && a.studentId === assignment.studentId && a.areaId === assignment.areaId && isOpenAssignment(a)); const { busy, error, setError, save, done } = useSave(onClose);
   const [rows, setRows] = useState<ScoreRow[]>(assignment.skillIds.map(skillId => ({ skillId, score: null, notes: [], text: '', writing: false, added: false })));
   const [feedback, setFeedback] = useState(''); const [outcome, setOutcome] = useState<'completed' | 'changes_requested'>('completed'); const [nextReviewAt, setNextReviewAt] = useState('');
   const [adding, setAdding] = useState<'pick' | 'new' | null>(null); const [pick, setPick] = useState('');
@@ -658,7 +968,8 @@ function EvaluationForm({ assignment, onClose }: { assignment: Assignment; onClo
     if (!complete) { setError('Primero registra una entrega completa.'); return; }
     if (!scored.length) { setError('Califica al menos una habilidad. Deja sin nota las que no observaste.'); return; }
     save(() => post(`/assignments/${assignment.id}/evaluations`, { version: assignment.version, scores: rows.map(r => ({ skillId: r.skillId, score: r.score, comment: [...r.notes, r.text.trim()].filter(Boolean).join('. ') })), feedback: feedback.trim(), outcome, nextReviewAt: outcome === 'changes_requested' && nextReviewAt ? fromInput(nextReviewAt) : undefined, reviewId: closeReview && linkedReview ? linkedReview.id : undefined }),
-      outcome === 'completed' ? 'Evaluación guardada. Actividad terminada.' : 'Evaluación guardada. Se pidieron correcciones.', 'Guardada');
+      outcome === 'completed' ? (lastOpen ? `Actividad terminada. ¿Qué sigue para ${firstName(student?.name)}? Asígnale su siguiente actividad.` : 'Evaluación guardada. Actividad terminada.') : 'Evaluación guardada. Se pidieron correcciones.', 'Guardada',
+      outcome === 'completed' && lastOpen ? () => modal({ type: 'assignment', studentId: assignment.studentId }) : undefined);
   }
   // Enter dentro de los campos auxiliares no debe enviar la evaluación completa.
   const onEnter = (e: KeyboardEvent<HTMLInputElement>, action?: () => void) => { if (e.key === 'Enter') { e.preventDefault(); action?.(); } };

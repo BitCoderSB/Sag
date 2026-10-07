@@ -71,14 +71,19 @@ test('end-to-end: unique student, assignment, delivery, evaluation, persistence 
   await expect(evaluationDialog.getByRole('slider', { name: 'Calificación de Backend' })).toHaveAttribute('aria-valuenow', '0');
   await evaluationDialog.getByLabel('Retroalimentación').fill('Interfaz bien lograda; Backend observado con dificultades. Documentación no evaluada.');
   await evaluationDialog.getByRole('button', { name: /Guardar evaluación|Finalizar evaluación/ }).click();
-  await expect(page.locator('.assignment-profile-head')).toContainText('Terminada');
+  // Era su única actividad: la app propone de inmediato asignarle la siguiente («¿Qué sigue?»), con el alumno ya elegido.
+  const nextDialog = page.getByRole('dialog', { name: 'Asignar actividad' });
+  await expect(nextDialog).toBeVisible();
+  await expect(nextDialog.locator(".locked-value")).toContainText(`Lucía Prueba ${runId}`);
+  await nextDialog.getByRole('button', { name: 'Cancelar' }).click();
+  await expect(page.locator('.ad-situation')).toContainText('Terminada');
   await page.getByRole('tab', { name: /Evaluaciones/ }).click();
   await expect(page.locator('.evaluation-scores')).toContainText('Sin evaluar');
   await expect(page.locator('.evaluation-scores')).toContainText('0');
   await page.reload();
   await page.getByLabel('Buscar actividades', { exact: true }).fill(`Interfaz de pruebas ${runId}`);
   await page.locator('.activity-name').click();
-  await expect(page.locator('.assignment-profile-head')).toContainText('Terminada');
+  await expect(page.locator('.ad-situation')).toContainText('Terminada');
   await page.getByRole('button', { name: 'Cerrar detalle', exact: true }).click();
   await page.goto('/#talent');
   await page.getByLabel('Buscar talento por nombre o tecnología').fill(`Lucía Prueba ${runId}`);

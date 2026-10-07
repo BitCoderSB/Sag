@@ -53,7 +53,7 @@ export default function Assignments() {
       {q && view === 'list' && <span className="toolbar-note">Resultados de todos los estados</span>}
       <div className="toolbar-filters">
         {app.readonly && <Select label="Área" value={area} onChange={v => setArea(v as AreaId | 'all')}><option value="all">Todas las áreas</option>{AREAS.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</Select>}
-        <Segmented label="Vista" value={view} onChange={setView} className="segmented-icons" options={[{ value: 'list', label: <ListBullets size={17} />, title: 'Lista' }, { value: 'board', label: <Kanban size={17} />, title: 'Tablero por estado' }]} />
+        {/* El tablero por etapas vive en su propia ventana (Tablero); aquí queda la lista con filtros. */}<button type="button" className="button button-secondary button-sm" onClick={() => app.navigate('board')}><Kanban size={16} />Ver en el tablero</button>
       </div>
     </div>
     {view === 'list' ? <section className="panel table-panel">
