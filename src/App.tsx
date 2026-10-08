@@ -20,9 +20,10 @@ import StudentDrawer from './components/StudentDrawer';
 import AssignmentDrawer from './components/AssignmentDrawer';
 import CommandPalette from './components/CommandPalette';
 import Ambient from './components/Ambient';
+import GanttView from './pages/GanttView';
 
-const PAGES: Page[] = ['today', 'board', 'students', 'assignments', 'talent', 'reports', 'settings'];
-const TITLES: Record<Page, string> = { today: 'Hoy', board: 'Tablero', students: 'Alumnos', assignments: 'Actividades', talent: 'Talento', reports: 'Reportes', settings: 'Configuración' };
+const PAGES: Page[] = ['today', 'board', 'students', 'assignments', 'talent', 'reports', 'settings', 'gantt'];
+const TITLES: Record<Page, string> = { today: 'Hoy', board: 'Tablero', students: 'Alumnos', assignments: 'Actividades', talent: 'Talento', reports: 'Reportes', settings: 'Configuración', gantt: 'Cronograma' };
 function readRoute() {
   const raw = location.hash.slice(1);
   const [path, query = ''] = raw.split('?');
@@ -68,6 +69,8 @@ export default function App() {
     return () => { alive = false; clearInterval(interval); };
   }, [session?.user?.id, refresh]);
   useEffect(() => { const change = () => setRoute(readRoute()); window.addEventListener('hashchange', change); return () => window.removeEventListener('hashchange', change); }, []);
+  // Al pasar a la vista ampliada (o salir de ella) no se arrastran paneles abiertos de la otra vista.
+  useEffect(() => { setStudentId(null); setAssignmentId(null); }, [route.page === 'gantt']);
   useEffect(() => {
     const expired = () => { if (session?.user) { login({ user: null, csrf: null, demo: session.demo }); setModal(null); setStudentId(null); setAssignmentId(null); toast('Tu sesión terminó. Inicia sesión de nuevo.', 'error'); } };
     window.addEventListener('sag:session-expired', expired); return () => window.removeEventListener('sag:session-expired', expired);
@@ -105,6 +108,16 @@ export default function App() {
     { id: 'talent', label: 'Talento', icon: Sparkle },
     { id: 'reports', label: 'Reportes', icon: ChartBar },
   ];
+  // Vista ampliada del Gantt: pantalla completa, sin barra lateral (se abre en otra pestaña con «Expandir»).
+  if (route.page === 'gantt') return <div className="gantt-screen">
+    {workspace ? <AppContext.Provider value={{ workspace, refresh, toast, navigate, params: route.params, openStudent, openAssignment, modal: setModal, readonly, demo: session.demo, fresh, markFresh }}>
+      <main id="main" className="gantt-screen-main"><GanttView key={route.key} /></main>
+      {studentId && <StudentDrawer id={studentId} onClose={() => setStudentId(null)} />}
+      {assignmentId && <AssignmentDrawer id={assignmentId} onClose={() => setAssignmentId(null)} />}
+      {modal && <Forms state={modal} onClose={() => setModal(null)} />}
+    </AppContext.Provider> : loadError ? <Empty icon={<WarningCircle size={22} />} title="No pudimos cargar tus datos" description={loadError} /> : <Loading />}
+    {message && <Toast key={message.id} message={message.text} kind={message.kind} leaving={message.leaving} />}
+  </div>;
   const roleLabel = readonly ? 'Jefe · solo lectura' : `Responsable de ${areaName(user.areaId!)}`;
 
   return <div className="shell">

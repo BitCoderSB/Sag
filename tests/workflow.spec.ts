@@ -164,3 +164,15 @@ test('mobile navigation, search, drawer focus, empty state and calendar controls
   await expect(page.getByRole('dialog')).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
+test('timeline expands to a full-screen view in a new tab', async ({ page, context }) => {
+  await login(page);
+  await page.goto('/#students?v=timeline');
+  const popup = context.waitForEvent('page');
+  await page.getByRole('button', { name: 'Expandir', exact: true }).click();
+  const full = await popup;
+  await expect(full.getByRole('heading', { level: 1, name: 'Cronograma de alumnos' })).toBeVisible();
+  await expect(full.locator('.gantt.is-full .gantt-row').first()).toBeVisible();
+  await full.getByRole('radio', { name: 'Meses', exact: true }).click();
+  await expect(full.locator('.gantt-today-tag')).toBeVisible();
+  await expect(full.locator('.sidebar')).toHaveCount(0);
+});

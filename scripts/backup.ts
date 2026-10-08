@@ -20,7 +20,8 @@ const copy = openStore(snapshot);
 try {
   // Sessions are intentionally excluded: a restore requires a fresh login.
   copy.db.exec('DELETE FROM sessions; PRAGMA wal_checkpoint(TRUNCATE);');
-  const files = copy.all<Attachment&{storageName:string}>('attachments');
+  // Adjuntos de actividades y documentos de tesis viven en la misma carpeta.
+  const files = [...copy.all<Attachment&{storageName:string}>('attachments'),...copy.all<{id:string;name:string;size:number;storageName:string}>('thesisDocs')];
   const sourceFiles = resolve(process.env.SAG_FILES??'.data/files');
   const targetFiles = join(target,'files');
   mkdirSync(targetFiles,{recursive:true});

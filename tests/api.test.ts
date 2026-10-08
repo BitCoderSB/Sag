@@ -331,6 +331,43 @@ test('foreign review cannot be closed as part of another activity evaluation',as
   assert.equal(response.status,409);assert.equal(store.all('evaluations').length,count);
   assert.equal(store.get<Assignment>('assignments',a.id)!.version,a.version);
 });
+/** ZIP mínimo sin compresión (lo justo para un .xlsx de prueba). */
+function zip(entries:Record<string,string>){
+  const locals:Buffer[]=[];const centrals:Buffer[]=[];let offset=0;
+  for(const [name,text] of Object.entries(entries)){
+    const data=Buffer.from(text);const n=Buffer.from(name);
+    const local=Buffer.alloc(30);local.writeUInt32LE(0x04034b50,0);local.writeUInt32LE(data.length,18);local.writeUInt32LE(data.length,22);local.writeUInt16LE(n.length,26);
+    const central=Buffer.alloc(46);central.writeUInt32LE(0x02014b50,0);central.writeUInt32LE(data.length,20);central.writeUInt32LE(data.length,24);central.writeUInt16LE(n.length,28);central.writeUInt32LE(offset,42);
+    locals.push(local,n,data);centrals.push(central,n);offset+=30+n.length+data.length;
+  }
+  const dir=Buffer.concat(centrals);const end=Buffer.alloc(22);end.writeUInt32LE(0x06054b50,0);end.writeUInt16LE(centrals.length/2,8);end.writeUInt16LE(centrals.length/2,10);end.writeUInt32LE(dir.length,12);end.writeUInt32LE(offset,16);
+  return Buffer.concat([...locals,dir,end]);
+}
+test('thesis documents: research uploads, a schedule sets the plan, other areas cannot see them',async()=>{
+  const re=await session('research'); const sw=await session('software');
+  const st=(await jsonOk(await re.request('/api/students','POST',{name:'Tesista Documentos',registration:'TES-TEST-2',modalities:['Tesis']}),201)).student as Student;
+  await jsonOk(await re.request(`/api/students/${st.id}/thesis`,'PUT',{topic:'Robótica'}));
+  const sheet='<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row><row r="2"><c r="A2" t="s"><v>1</v></c><c r="B2"><v>46251</v></c><c r="C2"><v>46265</v></c></row><row r="3"><c r="A3" t="s"><v>2</v></c><c r="B3"><v>46266</v></c><c r="C3"><v>46287</v></c></row><row r="4"><c r="A4" t="s"><v>3</v></c><c r="B4"><v>46294</v></c><c r="C4"><v>46412</v></c></row></sheetData></worksheet>';
+  const strings='<sst><si><t>Fases (A)</t></si><si><t>1. Elección de tema y delimitación (Pre-propuesta)</t></si><si><t>2. Desarrollo de Propuesta de tesis</t></si><si><t>9. Redacción de documento</t></si></sst>';
+  const form=new FormData();form.set('kind','schedule');form.set('file',new Blob([zip({'xl/worksheets/sheet1.xml':sheet,'xl/sharedStrings.xml':strings})]),'Cronograma.xlsx');
+  const up=await jsonOk(await re.request(`/api/students/${st.id}/thesis/files`,'POST',form),201);
+  assert.equal(up.document.storageName,undefined); assert.equal(up.plan.length,3);
+  assert.deepEqual(up.plan[0],{label:'Elección de tema y delimitación (Pre-propuesta)',start:'2026-08-17',end:'2026-08-31',phase:'preproposal'});
+  assert.equal(up.plan[2].phase,null);
+  const mine=await jsonOk(await re.request('/api/workspace')) as Workspace;
+  assert.equal(mine.students.find(s=>s.id===st.id)?.thesis?.plan?.length,3); assert.ok(mine.thesisDocs?.some(d=>d.id===up.document.id));
+  const bad=new FormData();bad.set('kind','schedule');bad.set('file',new Blob(['hola']),'notas.txt');
+  assert.equal((await re.request(`/api/students/${st.id}/thesis/files`,'POST',bad)).status,400);
+  const path=`/api/thesis-files/${up.document.id}`;
+  assert.equal((await sw.request(path)).status,404);
+  assert.ok(!((await jsonOk(await sw.request('/api/workspace')) as Workspace).thesisDocs??[]).length);
+  const pdf=new FormData();pdf.set('kind','proposal');pdf.set('file',new Blob(['%PDF-1.4 prueba']),'Propuesta.pdf');
+  assert.equal((await sw.request(`/api/students/${st.id}/thesis/files`,'POST',pdf)).status,403);
+  const doc=(await jsonOk(await re.request(`/api/students/${st.id}/thesis/files`,'POST',pdf),201)).document;
+  assert.equal((await re.request(`/api/thesis-files/${doc.id}`)).status,200);
+  assert.equal((await re.request(`/api/thesis-files/${doc.id}`,'DELETE',{})).status,204);
+  assert.equal((await re.request(`/api/thesis-files/${doc.id}`)).status,404);
+});
 test('files are authenticated, area-restricted, allowlisted and always downloaded',async()=>{
   const c=await client('software');const a=await newAssignment(c);
   const form=new FormData();form.set('kind','evidence');form.set('file',new Blob(['Documento de prueba'],{type:'text/plain'}),'evidencia.txt');
@@ -365,7 +402,7 @@ test('backup takes a readable snapshot with private files and excludes sessions'
     assert.equal(restored.all('students').length,store.all('students').length);
     assert.equal(restored.db.prepare('SELECT count(*) AS n FROM sessions').get()!.n,0);
     const manifest=JSON.parse(readFileSync(join(snapshot,'manifest.json'),'utf8'));
-    assert.equal(manifest.attachments.length,store.all('attachments').length);
+    assert.equal(manifest.attachments.length,store.all('attachments').length+store.all('thesisDocs').length);
     assert.ok(manifest.attachments.length>0);
     const first=manifest.attachments[0];assert.equal(readFileSync(join(snapshot,'files',first.storageName),'utf8'),'Documento de prueba');
   } finally {restored.close();}

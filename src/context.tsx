@@ -2,7 +2,7 @@ import { createContext, useContext } from 'react';
 import type { AreaId, PauseKind } from '../shared/types';
 import type { ActivityDraft, Student, Workspace, Assignment, Review, Meeting } from '../shared/types';
 
-export type Page = 'today' | 'board' | 'students' | 'assignments' | 'talent' | 'reports' | 'settings';
+export type Page = 'today' | 'board' | 'students' | 'assignments' | 'talent' | 'reports' | 'settings' | 'gantt';
 export type ModalState =
   | { type: 'student'; student?: Student }
   | { type: 'assignment'; studentId?: string; dueDate?: string; draft?: ActivityDraft }

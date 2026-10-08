@@ -1,4 +1,5 @@
 import type { AnimalId } from './avatars.js';
+import type { ThesisDocument } from './thesis.js';
 
 export type AreaId = 'software' | 'hardware' | 'research';
 export type Role = AreaId | 'director';
@@ -87,6 +88,8 @@ export interface Workspace {
   meetings: Meeting[];
   /** Banco de actividades del área (el jefe ve los de todas). Opcional para respuestas anteriores. */
   drafts?: ActivityDraft[];
+  /** Documentos de tesis de los alumnos cuya tesis puedes ver. */
+  thesisDocs?: ThesisDocument[];
 }
 export const AREAS: Area[] = [
   { id: 'software', name: 'Software', description: 'Desarrollo y experiencias digitales' },

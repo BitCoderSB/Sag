@@ -1,10 +1,11 @@
-import { useState, type FormEvent, type ReactElement, type ReactNode } from 'react';
-import { ArrowBendUpLeft, ArrowRight, ArrowsClockwise, Check, CheckCircle, ClockCounterClockwise, FileText, FolderOpen, GraduationCap, Notepad, Phone, PhoneCall } from '@phosphor-icons/react';
+import { useRef, useState, type FormEvent, type ReactElement, type ReactNode } from 'react';
+import { ArrowBendUpLeft, ArrowRight, ArrowsClockwise, ChartBarHorizontal, Check, CheckCircle, ClockCounterClockwise, File, FileDoc, FilePdf, FileText, FileXls, FolderOpen, Trash, UploadSimple, GraduationCap, Notepad, Phone, PhoneCall } from '@phosphor-icons/react';
 import type { Student } from '../../shared/types';
-import { nextPhase, phaseInfo, STEP_LABEL, THESIS_PHASES, type ThesisAction, type ThesisPhase, type ThesisStep } from '../../shared/thesis';
+import { DOC_KIND_LABEL, guessDocKind, nextPhase, phaseInfo, STEP_LABEL, THESIS_PHASES, type ThesisDocKind, type ThesisAction, type ThesisPhase, type ThesisStep } from '../../shared/thesis';
 import { useApp } from '../context';
-import { api, dayDiff, formatDate, formatTime, plural, post, relativeDay, safeUrl, toHttpUrl } from '../lib';
-import { Button, ErrorMessage, ExternalLink, Field, Modal } from './ui';
+import { api, dayDiff, del, FILE_TYPES, fileSize, formatDate, formatTime, plural, post, relativeDay, safeUrl, toHttpUrl } from '../lib';
+import { Button, ErrorMessage, ExternalLink, Field, IconButton, Modal } from './ui';
+import { openGantt } from './StudentPlan';
 
 /** Carpeta de Drive del área con las propuestas, estados y documentos de cada tesista. */
 import { RESEARCH_DRIVE_URL } from '../../shared/research';
@@ -75,8 +76,11 @@ export function ThesisPanel({ student }: { student: Student }) {
     <div className="th-links">
       {proposal ? <ExternalLink url={proposal}><FileText size={15} aria-hidden="true" />Pre-propuesta / propuesta</ExternalLink> : <span className="muted"><FileText size={15} aria-hidden="true" />Sin documento de propuesta</span>}
       <ExternalLink url={drive}><FolderOpen size={15} aria-hidden="true" />{safeUrl(t.driveUrl) ? 'Su carpeta en Drive' : 'Carpeta de tesis en Drive'}</ExternalLink>
+      <button type="button" className="ad-inline-link" onClick={() => openGantt({ student: student.id })}><ChartBarHorizontal size={14} aria-hidden="true" />{t.plan?.length ? 'Cronograma' : 'Plan'}</button>
       {editable && <button type="button" className="ad-inline-link" onClick={() => app.modal({ type: 'thesis', student })}>Editar datos</button>}
     </div>
+
+    <ThesisDocs student={student} editable={editable} />
 
     <section className="th-history" aria-labelledby="th-history-title">
       <h4 id="th-history-title">Historial de la tesis<span className="count">{t.history.length}</span></h4>
@@ -87,6 +91,48 @@ export function ThesisPanel({ student }: { student: Student }) {
     </section>
   </div>;
 }
+const DOC_ORDER: ThesisDocKind[] = ['proposal', 'preproposal', 'delimitation', 'draft', 'schedule', 'other'];
+const docIcon = (name: string) => { const ext = name.split('.').pop()?.toLowerCase(); return ext === 'pdf' ? <FilePdf size={18} /> : ext === 'xlsx' || ext === 'csv' ? <FileXls size={18} /> : ext === 'docx' ? <FileDoc size={18} /> : <File size={18} />; };
+/** Documentos del expediente de tesis. El tipo se deduce del nombre; un cronograma .xlsx actualiza el plan del Gantt. */
+function ThesisDocs({ student, editable }: { student: Student; editable: boolean }) {
+  const app = useApp(); const input = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [confirm, setConfirm] = useState<string | null>(null);
+  const docs = (app.workspace.thesisDocs ?? []).filter(d => d.studentId === student.id).sort((a, b) => DOC_ORDER.indexOf(a.kind) - DOC_ORDER.indexOf(b.kind) || b.createdAt.localeCompare(a.createdAt));
+  async function upload(list: FileList | null) {
+    const picked = [...(list ?? [])]; if (!picked.length || busy) return;
+    setBusy(true); setError(''); const failed: string[] = []; let ok = 0; let plan = false;
+    for (const file of picked) {
+      if (file.size > 10 * 1024 * 1024) { failed.push(`${file.name} pesa más de 10 MB`); continue; }
+      const data = new FormData(); data.append('kind', guessDocKind(file.name)); data.append('file', file);
+      try { const r = await api<{ plan: unknown[] | null }>(`/students/${student.id}/thesis/files`, { method: 'POST', body: data }); ok++; plan ||= !!r.plan; }
+      catch (e) { failed.push(`${file.name} (${(e as Error).message})`); }
+    }
+    try { await app.refresh(); } catch { /* se verá al recargar */ }
+    if (ok) app.toast(plan ? 'Cronograma cargado: el plan ya está en el Gantt.' : ok === 1 ? 'Documento subido.' : `${ok} documentos subidos.`);
+    if (failed.length) setError(`No se subió: ${failed.join('; ')}.`);
+    setBusy(false); if (input.current) input.current.value = '';
+  }
+  async function remove(id: string, name: string) {
+    setBusy(true); setError('');
+    try { await del(`/thesis-files/${id}`); await app.refresh(); app.toast(`Se quitó ${name}.`); } catch (e) { setError((e as Error).message); }
+    finally { setBusy(false); setConfirm(null); }
+  }
+  return <section className="th-docs" aria-labelledby="th-docs-title">
+    <h4 id="th-docs-title">Documentos<span className="count">{docs.length}</span>
+      {editable && <button type="button" className="ad-inline-link" disabled={busy} onClick={() => input.current?.click()}><UploadSimple size={14} aria-hidden="true" />Subir documentos</button>}
+    </h4>
+    <input ref={input} type="file" className="sr-only" tabIndex={-1} aria-label="Elegir documentos de tesis" accept={FILE_TYPES} multiple onChange={e => upload(e.target.files)} />
+    <ErrorMessage message={error} />
+    {docs.length ? <ul className="th-doc-list">{docs.map(d => <li key={d.id} className={`is-${d.kind}`}>
+      <span className="th-doc-icon" aria-hidden="true">{docIcon(d.name)}</span>
+      <a href={`/api/thesis-files/${d.id}`} download className="th-doc-link"><strong>{d.name}</strong><small>{DOC_KIND_LABEL[d.kind]} · {fileSize(d.size)} · {formatDate(d.createdAt, { year: 'numeric' })}</small></a>
+      {editable && (confirm === d.id
+        ? <span className="th-doc-confirm"><Button size="sm" variant="danger" loading={busy} onClick={() => remove(d.id, d.name)}>Quitar</Button><Button size="sm" variant="ghost" onClick={() => setConfirm(null)}>No</Button></span>
+        : <IconButton className="file-remove" label={`Quitar ${d.name}`} disabled={busy} onClick={() => setConfirm(d.id)}><Trash size={15} /></IconButton>)}
+    </li>)}</ul> : <p className="drawer-empty">{editable ? 'Sin documentos. Sube su pre-propuesta, propuesta o cronograma (PDF, Word o Excel, hasta 10 MB). El cronograma .xlsx de la plantilla se vuelve su plan en el Gantt.' : 'Sin documentos.'}</p>}
+  </section>;
+}
+
 const ACTION_TEXT: Record<ThesisAction, (from: string, to: string) => string> = {
   kickoff: () => 'Llamada inicial', submitted: f => `Entregó · ${f}`, reviewed: f => `Revisaste · ${f}`,
   advance: (f, t) => `Aprobada ${f} → ${t}`, stay: f => `Correcciones en ${f}`, back: (f, t) => `Regresa de ${f} a ${t}`, defended: () => 'Defendió su tesis', moved: (f, t) => t ? `Movida de ${f} a ${t}` : `Registrada en ${f}`,

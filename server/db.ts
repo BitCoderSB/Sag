@@ -6,7 +6,7 @@ import { dirname, resolve } from 'node:path';
 import type { User } from '../shared/types.js';
 
 const scrypt = promisify(nodeScrypt);
-export type Entity = 'students' | 'assignments' | 'reviews' | 'deliveries' | 'evaluations' | 'skills' | 'notes' | 'attachments' | 'audit' | 'meetings' | 'drafts';
+export type Entity = 'students' | 'assignments' | 'reviews' | 'deliveries' | 'evaluations' | 'skills' | 'notes' | 'attachments' | 'audit' | 'meetings' | 'drafts' | 'thesisDocs';
 export interface StoredUser extends User { passwordHash: string }
 export interface StoredSession { hash: string; user_id: string; csrf: string; expires_at: number }
 export class Store {
@@ -21,7 +21,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS sessions (hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, csrf TEXT NOT NULL, expires_at INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires_at);
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
-    for (const table of ['students','assignments','reviews','deliveries','evaluations','skills','notes','attachments','audit','meetings','drafts']) {
+    for (const table of ['students','assignments','reviews','deliveries','evaluations','skills','notes','attachments','audit','meetings','drafts','thesisDocs']) {
       this.db.exec(`CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, data TEXT NOT NULL CHECK(json_valid(data)));`);
     }
     this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS student_registration ON students(upper(json_extract(data, '$.registration')));

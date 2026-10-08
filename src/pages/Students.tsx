@@ -5,7 +5,8 @@ import { useApp } from '../context';
 import { phaseInfo, STEP_LABEL } from '../../shared/thesis';
 import { activitySteps, currentAssignment, DAY, dueText, followUp, formatDate, HEALTH, isOpen, studentPeriod, type Health, HEALTH_GROUPS, inGroup, nextReview, normalize, plural, scoped, studentHealth, type HealthGroup } from '../lib';
 import { AreaTag, Badge, StatusAvatar, Steps, Button, Empty, FilterTabs, Menu, NextReviewCell, PageHeader, Search, Segmented, Select } from '../components/ui';
-import Gantt, { type GanttRow } from '../components/Gantt';
+import Gantt, { type GanttRow, type GanttScale } from '../components/Gantt';
+import { openGantt, thesisSchedule } from '../components/StudentPlan';
 import StudentAction from '../components/StudentAction';
 
 type Filter = 'all' | HealthGroup;
@@ -43,7 +44,7 @@ export default function Students() {
         <Select label="Estado del alumno" value={status} onChange={setStatus}><option value="active">Activos</option><option value="paused">En pausa</option><option value="completed">Terminaron</option><option value="all">Todos los estados</option></Select>
       </div>
     </div>
-    {view === 'timeline' ? <section className="panel timeline-panel"><Timeline w={w} rows={visible} onOpen={app.openStudent} /></section> : <section className="panel table-panel">
+    {view === 'timeline' ? <section className="panel timeline-panel"><Timeline w={w} rows={visible} onOpen={app.openStudent} onExpand={() => openGantt({ view: 'students', ...(area !== 'all' ? { area } : {}), ...(status !== 'active' ? { status } : {}) })} /></section> : <section className="panel table-panel">
       <div className="table-scroll">
         <table className="table table-cards">
           <thead><tr><th>Alumno</th><th className="col-md">Actividad actual</th><th>Situación</th><th className="col-lg">Próxima revisión</th>{app.readonly && <th className="col-lg">Áreas</th>}<th><span className="sr-only">Acciones</span></th></tr></thead>
@@ -76,21 +77,24 @@ export default function Students() {
 }
 
 /** Una fila por alumno: su periodo, las fechas límite abiertas y la próxima revisión. Responde quién termina pronto y quién está saturado. */
-function Timeline({ w, rows, onOpen }: { w: Workspace; rows: { s: Student; health: Health }[]; onOpen: (id: string) => void }) {
+export function Timeline({ w, rows, onOpen, size = 'compact', scale, onExpand }: { w: Workspace; rows: { s: Student; health: Health }[]; onOpen: (id: string) => void; size?: 'compact' | 'full'; scale?: GanttScale; onExpand?: () => void }) {
   const at = (key: string) => Date.parse(`${key}T12:00:00-06:00`);
   const items: GanttRow[] = [...rows].sort((a, b) => (studentPeriod(w, a.s).end ?? '9').localeCompare(studentPeriod(w, b.s).end ?? '9')).map(({ s, health }) => {
     const period = studentPeriod(w, s); const start = at(period.start); const end = period.end ? at(period.end) : Math.max(Date.now(), start) + 30 * DAY;
     const dues = w.assignments.filter(a => a.studentId === s.id && isOpen(a) && a.dueAt);
     const next = w.reviews.filter(r => r.studentId === s.id && r.status === 'scheduled' && Date.parse(r.startsAt) >= Date.now()).sort((a, b) => a.startsAt.localeCompare(b.startsAt))[0];
+    const t = s.thesis; const sched = thesisSchedule(s);
+    const plan = t?.plan?.length ? { start: at(t.plan.map(p => p.start).sort()[0]), end: at(t.plan.map(p => p.end).sort().at(-1)!) } : undefined;
     return {
-      id: s.id, label: s.name, sub: `${HEALTH[health].label}${period.end ? ` · termina ${formatDate(new Date(end))}` : ' · sin fecha de término'}`,
+      id: s.id, label: s.name, sub: t ? `Tesis · ${phaseInfo(t.phase).short}${sched?.delay ? ` · ${plural(sched.delay, 'día', 'días')} de atraso` : ''}` : `${HEALTH[health].label}${period.end ? ` · termina ${formatDate(new Date(end))}` : ' · sin fecha de término'}`, plan,
+      detail: [HEALTH[health].label, ...(t ? [`Fase ${phaseInfo(t.phase).n} de 10 · ${STEP_LABEL[t.step]}`] : []), ...(sched ? [`Defensa planeada: ${formatDate(new Date(sched.defense), { year: 'numeric' })}`] : []), ...(dues.length ? [plural(dues.length, 'entrega abierta', 'entregas abiertas')] : [])],
       lead: <StatusAvatar name={s.name} avatar={s.avatar} health={health} size="sm" />,
-      start, end, tone: HEALTH[health].dot === 'neutral' ? 'idle' : HEALTH[health].dot,
+      start, end, tone: sched?.delay && HEALTH[health].dot !== 'danger' ? 'warn' : HEALTH[health].dot === 'neutral' ? 'idle' : HEALTH[health].dot,
       markers: [...dues.map(a => ({ at: Date.parse(a.dueAt!), kind: 'due' as const, title: `Vence: ${a.title}` })), ...(next ? [{ at: Date.parse(next.startsAt), kind: 'review' as const, title: `Próxima revisión ${formatDate(next.startsAt)}` }] : [])],
       onClick: () => onOpen(s.id),
       describe: `${s.name}: ${HEALTH[health].label}. Periodo del ${formatDate(new Date(start))} ${period.end ? `al ${formatDate(new Date(end))}` : 'sin fecha de término'}. ${plural(dues.length, 'entrega abierta', 'entregas abiertas')}.`,
     };
   });
-  const legend = <><span><i className="gantt-key gantt-bar tone-ok" />Al día</span><span><i className="gantt-key gantt-bar tone-info" />Por evaluar</span><span><i className="gantt-key gantt-bar tone-warn" />Atrasado</span><span><i className="gantt-key gantt-bar tone-danger" />Con impedimento</span><span><i className="gantt-key gantt-bar tone-idle" />Sin actividad</span><span><i className="gantt-key gantt-marker gantt-due" />Fecha límite</span><span><i className="gantt-key gantt-marker gantt-review" />Próxima revisión</span></>;
-  return <Gantt rows={items} legend={legend} label="Cronograma de alumnos" empty={<Empty icon={<UsersThree size={20} />} title="No hay alumnos en esta vista" description="Cambia el filtro o el estado para verlos." />} />;
+  const legend = <><span><i className="gantt-key gantt-bar tone-ok" />Al día</span><span><i className="gantt-key gantt-bar tone-info" />Por evaluar</span><span><i className="gantt-key gantt-bar tone-warn" />Atrasado</span><span><i className="gantt-key gantt-bar tone-danger" />Con impedimento</span><span><i className="gantt-key gantt-bar tone-idle" />Sin actividad</span><span><i className="gantt-key gantt-marker gantt-due" />Fecha límite</span><span><i className="gantt-key gantt-marker gantt-review" />Próxima revisión</span>{items.some(i => i.plan) && <span><i className="gantt-key gantt-plan" />Cronograma de tesis</span>}</>;
+  return <Gantt rows={items} legend={legend} label="Cronograma de alumnos" size={size} scale={scale} onExpand={onExpand} empty={<Empty icon={<UsersThree size={20} />} title="No hay alumnos en esta vista" description="Cambia el filtro o el estado para verlos." />} />;
 }

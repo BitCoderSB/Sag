@@ -6,13 +6,15 @@ import { z } from 'zod';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdirSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
 import { extname, resolve, sep } from 'node:path';
+import { readSchedule } from './xlsx.js';
 import { Store, checkPassword, id, now, publicUser, type StoredSession } from './db.js';
 import { ANIMALS, isAnimal, pickAnimal } from '../shared/avatars.js';
 import { type ActivityDraft, AREAS, type User, type Student, type Assignment, type Review, type Skill, type Evaluation, type Delivery, type StudentNote, type Meeting, type Attachment, type AuditEvent, type Workspace } from '../shared/types.js';
-import { THESIS_PHASES, phaseInfo, applyThesisAction, type Thesis, type ThesisEvent, type ThesisAction, type ThesisPhase } from '../shared/thesis.js';
+import { THESIS_PHASES, phaseInfo, applyThesisAction, type Thesis, type ThesisDocument, type ThesisEvent, type ThesisAction, type ThesisPhase } from '../shared/thesis.js';
 
 type AuthRequest = Request & { actor?: User; session?: StoredSession };
 interface FileRecord extends Attachment { storageName: string; mimeType: string }
+interface ThesisFileRecord extends ThesisDocument { storageName: string; mimeType: string }
 interface AppOptions { store: Store; demo?: boolean; uploadsDir?: string; origins?: string[]; secureCookie?: boolean; distDir?: string; sessionHours?: number; trustProxy?: boolean }
 class ApiError extends Error { constructor(public status: number, message: string, public code?: string) { super(message); } }
 const fail = (status: number, message: string, code?: string): never => { throw new ApiError(status, message, code); };
@@ -146,7 +148,7 @@ export function createApp(options: AppOptions) {
     const assignmentIds = new Set(assignments.map(a=>a.id));
     const evaluations = store.all<Evaluation>('evaluations').map(e=>visibleArea(e.areaId) ? e : {...e,feedback:'',scores:e.scores.map(s=>({...s,comment:''}))});
     const drafts = store.all<ActivityDraft>('drafts').filter(d=>visibleArea(d.areaId));
-    return { user,areas:AREAS,students,assignments,drafts,reviews:store.all<Review>('reviews').filter(r=>visibleArea(r.areaId)),skills:store.all<Skill>('skills'),deliveries:store.all<Delivery>('deliveries').filter(d=>assignmentIds.has(d.assignmentId)),evaluations,notes:store.all<StudentNote>('notes').filter(n=>visibleArea(n.areaId)),attachments:store.all<FileRecord>('attachments').filter(f=>assignmentIds.has(f.assignmentId)).map(({storageName:_,mimeType:__,...file})=>file),audit:store.all<AuditEvent>('audit').filter(a=>visibleArea(a.areaId)).slice(-200).reverse(),meetings:store.all<Meeting>('meetings').filter(m=>user.role==='director'||m.areaIds.includes(user.areaId!)) };
+    return { user,areas:AREAS,students,assignments,drafts,reviews:store.all<Review>('reviews').filter(r=>visibleArea(r.areaId)),skills:store.all<Skill>('skills'),deliveries:store.all<Delivery>('deliveries').filter(d=>assignmentIds.has(d.assignmentId)),evaluations,notes:store.all<StudentNote>('notes').filter(n=>visibleArea(n.areaId)),attachments:store.all<FileRecord>('attachments').filter(f=>assignmentIds.has(f.assignmentId)).map(({storageName:_,mimeType:__,...file})=>file),audit:store.all<AuditEvent>('audit').filter(a=>visibleArea(a.areaId)).slice(-200).reverse(),meetings:store.all<Meeting>('meetings').filter(m=>user.role==='director'||m.areaIds.includes(user.areaId!)),thesisDocs:store.all<ThesisFileRecord>('thesisDocs').filter(d=>students.some(s=>s.id===d.studentId&&s.thesis)).map(({storageName:_,mimeType:__,...doc})=>doc) };
   }
   app.get('/api/workspace',auth,(req,res)=>res.json(workspace(actor(req))));
   // Banco de actividades: preparadas sin alumno, por área. Borrar una no toca datos de alumnos.
@@ -403,19 +405,63 @@ export function createApp(options: AppOptions) {
     res.status(201).json({skill});
   });
   const upload = multer({storage:multer.memoryStorage(),limits:{fileSize:10*1024*1024,files:1,fields:1,parts:2,fieldSize:100}});
-  app.post('/api/assignments/:id/files',...mutate,(req,res,next)=>{ assignmentFor(req,String(req.params.id)); next(); },upload.single('file'),(req,res)=>{
-    const assignment = assignmentFor(req,String(req.params.id));
-    const {kind} = z.object({kind:z.enum(['instruction','evidence'])}).strict().parse(req.body);
-    const file = req.file ?? fail(400,'Selecciona un archivo.');
+  /** Valida nombre, extensión y firma del archivo; el nombre en disco es aleatorio. */
+  function checkedUpload(file: Express.Multer.File | undefined) {
+    if (!file) return fail(400,'Selecciona un archivo.');
     const name = file.originalname.replace(/[\x00-\x1F\x7F/\\]/g,'_').slice(0,180);
     const extension = extname(name).toLowerCase();
     const types: Record<string,string> = {'.pdf':'application/pdf','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.txt':'text/plain','.csv':'text/csv','.md':'text/plain','.docx':'application/vnd.openxmlformats-officedocument.wordprocessingml.document','.xlsx':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','.pptx':'application/vnd.openxmlformats-officedocument.presentationml.presentation'};
     if (!types[extension]||file.size===0) fail(400,'Archivo no admitido. Usa PDF, imágenes PNG/JPG, texto, CSV o documentos Office sin macros.');
     const sig = file.buffer.subarray(0,8);
     if ((extension==='.pdf'&&!file.buffer.subarray(0,5).equals(Buffer.from('%PDF-'))) || (extension==='.png'&&!sig.equals(Buffer.from([137,80,78,71,13,10,26,10]))) || (['.jpg','.jpeg'].includes(extension)&&!(sig[0]===255&&sig[1]===216&&sig[2]===255)) || (['.docx','.xlsx','.pptx'].includes(extension)&&!(sig[0]===80&&sig[1]===75))) fail(400,'El contenido del archivo no coincide con su extensión.');
-    const attachment: FileRecord = {id:id('file'),assignmentId:assignment.id,name,size:file.size,kind,createdAt:now(),storageName:randomBytes(24).toString('hex')+extension,mimeType:types[extension]};
+    return {name,extension,size:file.size,buffer:file.buffer,mimeType:types[extension],storageName:randomBytes(24).toString('hex')+extension};
+  }
+  /** Documentos de tesis: los sube el responsable de Investigación; un cronograma .xlsx actualiza el plan del Gantt. */
+  app.post('/api/students/:id/thesis/files',...mutate,(req,_res,next)=>{ researchStudent(req,String(req.params.id)); next(); },upload.single('file'),(req,res)=>{
+    const student = researchStudent(req,String(req.params.id)); const user = actor(req);
+    const t = student.thesis ?? fail(409,'Este alumno aún no tiene seguimiento de tesis.');
+    const {kind} = z.object({kind:z.enum(['preproposal','proposal','delimitation','schedule','draft','other'])}).strict().parse(req.body);
+    const file = checkedUpload(req.file);
+    const plan = kind==='schedule' ? (file.extension==='.xlsx' ? readSchedule(file.buffer) : null) : undefined;
+    if (plan===null) fail(400,'No pude leer el cronograma. Sube el .xlsx de la plantilla (fase, fecha de inicio y fecha de fin).');
+    const doc: ThesisFileRecord = {id:id('tdoc'),studentId:student.id,name:file.name,size:file.size,kind,createdAt:now(),uploadedBy:user.name,storageName:file.storageName,mimeType:file.mimeType};
+    const path = resolve(uploadsDir,doc.storageName);
+    writeFileSync(path,file.buffer,{flag:'wx',mode:0o600});
+    try { store.transaction(()=>{ store.put('thesisDocs',doc); if (plan) store.put<Student>('students',{...student,thesis:{...t,plan},version:student.version+1}); audit(user,'thesis_file',student.id,`Documento de tesis: ${file.name}${plan?` (cronograma con ${plan.length} fases)`:''}.`); }); }
+    catch(error) { unlinkSync(path); throw error; }
+    const {storageName:_,mimeType:__,...safe} = doc;
+    res.status(201).json({document:safe,plan:plan??null});
+  });
+  const thesisFile = (req: Request, docId: string) => {
+    const doc = store.get<ThesisFileRecord>('thesisDocs',docId) ?? fail(404,'Documento no encontrado.');
+    const user = actor(req); const student = store.get<Student>('students',doc.studentId);
+    if (!student || !(user.role==='director'||(user.areaId==='research'&&student.areaIds.includes('research')))) fail(404,'Documento no encontrado.');
+    return doc;
+  };
+  app.get('/api/thesis-files/:id',auth,(req,res)=>{
+    const doc = thesisFile(req,String(req.params.id));
+    const path = resolve(uploadsDir,doc.storageName);
+    if (!path.startsWith(uploadsDir+sep)||!existsSync(path)) fail(404,'El archivo no está disponible.');
+    res.setHeader('Content-Security-Policy',"default-src 'none'; sandbox");
+    res.setHeader('X-Content-Type-Options','nosniff');
+    res.type(doc.mimeType);
+    res.download(path,doc.name);
+  });
+  app.delete('/api/thesis-files/:id',...mutate,(req,res)=>{
+    const doc = thesisFile(req,String(req.params.id)); researchStudent(req,doc.studentId);
+    store.transaction(()=>{ store.remove('thesisDocs',doc.id); audit(actor(req),'thesis_file_removed',doc.studentId,`Se quitó el documento de tesis ${doc.name}.`); });
+    const path = resolve(uploadsDir,doc.storageName);
+    if (path.startsWith(uploadsDir+sep)&&existsSync(path)) unlinkSync(path);
+    res.status(204).end();
+  });
+  app.post('/api/assignments/:id/files',...mutate,(req,res,next)=>{ assignmentFor(req,String(req.params.id)); next(); },upload.single('file'),(req,res)=>{
+    const assignment = assignmentFor(req,String(req.params.id));
+    const {kind} = z.object({kind:z.enum(['instruction','evidence'])}).strict().parse(req.body);
+    const file = checkedUpload(req.file);
+    const attachment: FileRecord = {id:id('file'),assignmentId:assignment.id,name:file.name,size:file.size,kind,createdAt:now(),storageName:file.storageName,mimeType:file.mimeType};
     const path = resolve(uploadsDir,attachment.storageName);
     writeFileSync(path,file.buffer,{flag:'wx',mode:0o600});
+    const name = file.name;
     try { store.transaction(()=>{ store.put('attachments',attachment); audit(actor(req),'file_uploaded',assignment.id,`Se adjuntó ${name} (${file.size} bytes).`); }); }
     catch(error) { unlinkSync(path); throw error; }
     const {storageName:_,mimeType:__,...safe} = attachment;

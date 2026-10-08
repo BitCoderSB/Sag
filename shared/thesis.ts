@@ -21,6 +21,34 @@ export interface Thesis {
   callAvailability: string;
   startedAt: string; phaseSince: string; defendedAt: string | null;
   history: ThesisEvent[];
+  /** Cronograma planeado (de la plantilla «Cronograma» del tesista). Sin él, el Gantt reparte las fases restantes. */
+  plan?: ThesisPlanItem[];
+}
+/** Una fila del cronograma (fechas AAAA-MM-DD). `phase` es null en tareas que corren en paralelo, como la redacción. */
+export interface ThesisPlanItem { label: string; start: string; end: string; phase: ThesisPhase | null }
+
+export type ThesisDocKind = 'preproposal' | 'proposal' | 'delimitation' | 'schedule' | 'draft' | 'other';
+/** Documento del expediente de tesis (pre-propuesta, propuesta, cronograma, borradores). */
+export interface ThesisDocument { id: string; studentId: string; name: string; size: number; kind: ThesisDocKind; createdAt: string; uploadedBy: string }
+export const DOC_KIND_LABEL: Record<ThesisDocKind, string> = { preproposal: 'Pre-propuesta', proposal: 'Propuesta', delimitation: 'Delimitación', schedule: 'Cronograma', draft: 'Borrador de tesis', other: 'Otro documento' };
+const plain = (s: string) => s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+/** Tipo probable de un documento por su nombre de archivo. */
+export function guessDocKind(name: string): ThesisDocKind {
+  const n = plain(name);
+  if (/cronograma/.test(n)) return 'schedule';
+  if (/pre-?propuesta/.test(n)) return 'preproposal';
+  if (/delimitaci/.test(n)) return 'delimitation';
+  if (/propuesta/.test(n)) return 'proposal';
+  if (/tesis/.test(n)) return 'draft';
+  return 'other';
+}
+/** Fase del flujo que corresponde a una fila del cronograma (por su nombre). */
+export function planPhase(label: string): ThesisPhase | null {
+  const n = plain(label);
+  const rules: [RegExp, ThesisPhase | null][] = [[/redaccion|documentacion/, null], [/eleccion de tema|pre-?propuesta|delimitacion/, 'preproposal'], [/propuesta/, 'proposal'], [/bibliograf|marco teorico/, 'theory'],
+    [/matematic/, 'math'], [/componentes|diseno|simulacion/, 'design'], [/implementacion|prototip/, 'prototype'], [/prueba|validacion/, 'testing'], [/diapositiva|presentacion/, 'slides'], [/correccion/, 'corrections'], [/defensa/, 'defense']];
+  for (const [re, phase] of rules) if (re.test(n)) return phase;
+  return null;
 }
 
 export interface PhaseInfo {

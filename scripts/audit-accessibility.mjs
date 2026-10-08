@@ -20,7 +20,7 @@ await page.getByRole('heading', { name: 'Inicia sesión' }).waitFor();
 await audit('login');
 await page.getByRole('button', { name: 'Responsable de Software', exact: true }).click();
 await page.getByRole('heading', { level: 1, name: /^(Software|Hardware|Investigación)$/ }).waitFor();
-for (const route of ['today', 'board', 'board?v=day', 'board?v=people', 'board?v=thesis', 'board?v=bank', 'students', 'assignments', 'talent', 'reports', 'settings']) {
+for (const route of ['today', 'board', 'board?v=day', 'board?v=people', 'board?v=thesis', 'board?v=bank', 'students', 'assignments', 'talent', 'reports', 'settings', 'gantt?view=students']) {
   await page.goto(`${base}/#${route}`);
   await page.locator('main h1').first().waitFor();
   await audit(route);
