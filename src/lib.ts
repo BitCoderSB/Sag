@@ -211,7 +211,9 @@ export function pendingTasks(w: Workspace): Task[] {
 /** Alumnos activos sin trabajo abierto: también son un pendiente (asignarles algo). */
 export const idleStudents = (w: Workspace) => w.students.filter(s => s.status === 'active' && studentHealth(w, s) === 'idle');
 /** Total de pendientes con la misma definición en el contador del menú y en Hoy. */
-export const todoCount = (w: Workspace) => pendingTasks(w).length + idleStudents(w).length + staleStudents(w).length;
+/** Tesis cuyo siguiente paso depende del responsable (llamada inicial, revisión o llamada de decisión). */
+export const thesisTodo = (w: Workspace) => w.students.filter(s => s.status === 'active' && s.thesis && ['kickoff', 'review', 'call'].includes(s.thesis.step)).length;
+export const todoCount = (w: Workspace) => pendingTasks(w).length + idleStudents(w).length + staleStudents(w).length + thesisTodo(w);
 
 /** Días sin revisión ni entrega a partir de los cuales un alumno sin cita próxima pide seguimiento. */
 export const STALE_DAYS = 14;
