@@ -143,7 +143,7 @@ export default function Forms({ state, onClose }: { state: NonNullable<ModalStat
 
 /* ---------- Alumno ---------- */
 
-const MODALITIES = ['Prácticas', 'Servicio social', 'Materias', 'Tesis', 'Investigación'];
+const MODALITIES = ['Prácticas', 'Servicio social', 'Materias', 'Tesis', 'Investigación', 'Colaborador'];
 /** Solo estas modalidades cuentan horas. */
 const HOUR_MODALITIES = ['Prácticas', 'Servicio social'];
 function StudentForm({ student, onClose }: { student?: Student; onClose: () => void }) {
