@@ -7,6 +7,12 @@ import '@fontsource/geist/latin-700.css';
 import App from './App';
 import './styles.css';
 
+// Tema antes del primer render (la CSP del servidor no permite scripts en línea en index.html).
+try {
+  const saved = localStorage.getItem('sag-theme');
+  document.documentElement.dataset.theme = saved === 'light' || saved === 'dark' ? saved : matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+} catch { document.documentElement.dataset.theme = 'dark'; }
+
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {
   state = { failed: false };
   static getDerivedStateFromError() { return { failed: true }; }
