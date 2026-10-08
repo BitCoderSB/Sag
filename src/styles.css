@@ -1158,7 +1158,8 @@ button.gantt-hit:hover .gantt-label strong { text-decoration: underline; text-un
 .hours strong { font-size: 15px; font-variant-numeric: tabular-nums; }
 .hours small { color: var(--muted); font-size: 12.5px; }
 .hours.is-behind small { color: var(--warn); }
-.cell-stale > span { display: inline-flex; align-items: center; gap: 5px; color: var(--warn); font-weight: 500; }
+.cell-stale > span { display: inline-flex; align-items: center; gap: 5px; color: var(--warn); font-weight: 500; white-space: nowrap; }
+.cell-stale small { white-space: nowrap; }
 .segmented-icons-text button { gap: 6px; }
 
 /* ---------- Crear: un solo botón con opciones ---------- */
@@ -1468,7 +1469,7 @@ kbd { background: transparent; border-color: rgb(255 255 255 / .16); color: var(
 
 /* Arrastrar a un día */
 .drag-handle { display: inline-grid; place-items: center; width: 22px; height: 30px; color: var(--subtle); cursor: grab; border-radius: 6px; transition: color 140ms ease, background-color 140ms ease; }
-.is-draggable { cursor: grab; }
+.is-draggable { cursor: grab; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .is-draggable:hover .drag-handle { color: var(--ink-2); background: rgb(255 255 255 / .06); }
 body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select: none; }
 body.is-dragging .peek { display: none; }
@@ -2128,6 +2129,7 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 .rail-alert svg:first-child { color: #ff6b5b; }
 .rail-alert svg:last-child { margin-left: auto; opacity: .8; }
 .rail-alert:hover { background: rgb(255 90 72 / .16); }
+.rail-board { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; margin-top: 14px; }
 .rail-progress { display: flex; flex-direction: column; gap: 7px; margin-top: 16px; font-size: 13px; color: var(--ink-2); }
 .rail-progress strong { font-weight: 500; }
 .rail-progress i { display: block; height: 5px; border-radius: 999px; background: rgb(255 255 255 / .08); overflow: hidden; }
@@ -2634,7 +2636,13 @@ body.is-dragging .bank-person:not(.is-over-drop) { box-shadow: inset 0 0 0 1px r
   .kb-lanes .kb-heads, .kb-lanes .kb-lane { --lane: 160px; }
 }
 /* Columnas: la de terminadas es angosta en carriles (solo contador). */
-.kb-lanes .kb-heads, .kb-lanes .kb-lane { grid-template-columns: 200px repeat(5, minmax(196px, 1fr)) 150px; min-width: calc(200px + 5 * 204px + 158px); }
+.kb-lanes { --lane: 200px; }
+.kb-lanes .kb-heads, .kb-lanes .kb-lane { grid-template-columns: var(--lane) repeat(5, minmax(196px, 1fr)) 150px; min-width: calc(var(--lane) + 5 * 204px + 158px); }
+.kb-lane-head { min-width: 0; }
+.kb-lane-head > .kb-person { max-width: 100%; }
+.kb-lanes .kb-person strong { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.25; }
+.kb-person small.is-thesis { color: var(--area-research); }
+@media (max-width: 960px) { .kb-lanes { --lane: 150px; } .kb-lanes .kb-heads, .kb-lanes .kb-lane { grid-template-columns: var(--lane) repeat(5, minmax(176px, 1fr)) 120px; min-width: calc(var(--lane) + 5 * 184px + 128px); } .kb-lane-head .button { padding-inline: 10px; } }
 .kb-lanes .kb-heads .kb-col-head:last-child strong { font-size: 13px; }
 .kb-cell-done { justify-content: center; }
 .kb-done-link { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px; border-radius: 9px; font-size: 13px; font-weight: 500; color: #7ddf9f; text-align: center; }
@@ -3348,3 +3356,9 @@ body.is-dragging .bank-person:not(.is-over-drop) { box-shadow: inset 0 0 0 1px r
   .gantt-screen .gantt.is-full .gantt-scroll { overflow: visible; box-shadow: none; }
 }
 :root[data-theme="light"] .gantt-bar.tone-danger .gantt-bar-text { color: #fff; }
+
+/* Tablero en pantallas angostas: vistas en una fila desplazable y textos sin cortes raros. */
+.board-views { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.board-views::-webkit-scrollbar { display: none; }
+.board-views button { white-space: nowrap; flex-shrink: 0; }
+.kb-person small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

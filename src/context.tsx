@@ -15,7 +15,7 @@ export type ModalState =
   | { type: 'pause'; student: Student; kind?: PauseKind }
   | { type: 'resume'; student: Student }
   | { type: 'thesis'; student: Student }
-  | { type: 'thesisStep'; student: Student; action: import('../shared/thesis').ThesisAction }
+  | { type: 'thesisStep'; student: Student; action: import('../shared/thesis').ThesisAction; to?: import('../shared/thesis').ThesisPhase }
   | { type: 'delivery'; assignment: Assignment; kind?: 'partial' | 'complete' }
   | { type: 'progress'; studentId?: string; assignment?: Assignment; kind?: 'partial' | 'complete' }
   | { type: 'certificate'; studentId: string }

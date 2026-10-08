@@ -3,7 +3,7 @@ import { ArrowRight, Barricade, CalendarBlank, CheckCircle, Circle, CircleHalf, 
 import type { ActivityDraft, Assignment, Student, Workspace } from '../../shared/types';
 import { useApp } from '../context';
 import { RESEARCH_DRIVE, ThesisCycle, daysInPhase, thesisNext } from '../components/Thesis';
-import { nextPhase, phaseInfo, STEP_LABEL, THESIS_PHASES, type ThesisStep } from '../../shared/thesis';
+import { nextPhase, phaseInfo, STEP_LABEL, THESIS_PHASES, type ThesisPhase, type ThesisStep } from '../../shared/thesis';
 import { actionsToday, assignmentProgress, dateKey, dayDiff, dueText, formatDate, HEALTH, isLate, isOpen, isWaiting, normalize, pauseOf, PAUSE_LABELS, plural, scoped, studentHealth, timeAgo, today, type Health } from '../lib';
 import { Avatar, Badge, Button, Empty, Menu, Search, StatusAvatar } from '../components/ui';
 import { beginDrag, DragLayer, useDragState, type DragItem } from '../components/CalendarDrag';
@@ -12,7 +12,7 @@ import { buildItems, describeEvent, itemDetail, KIND, TODAY_KINDS, LATER_KINDS, 
 type View = 'activities' | 'thesis' | 'day' | 'people' | 'bank';
 const VIEWS: { id: View; label: string; icon: typeof Kanban; hint: string }[] = [
   { id: 'activities', label: 'Actividades', icon: Kanban, hint: 'Cada actividad en su etapa; arrastra para registrar el siguiente paso.' },
-  { id: 'thesis', label: 'Tesis', icon: GraduationCap, hint: 'Cada tesista en su fase. Arrastra a la siguiente fase al aprobarla en la llamada.' },
+  { id: 'thesis', label: 'Tesis', icon: GraduationCap, hint: 'Cada tesista en su fase. Arrástralo a otra fase para moverlo.' },
   { id: 'day', label: 'Mi día', icon: Sun, hint: 'Lo atrasado, lo de hoy y lo que ya registraste hoy.' },
   { id: 'people', label: 'Participación', icon: Users, hint: 'En qué momento de su participación está cada alumno.' },
   { id: 'bank', label: 'Banco', icon: Archive, hint: 'Actividades preparadas sin alumno; arrástralas a quien le toque.' },
@@ -77,7 +77,9 @@ function ActivitiesBoard() {
   const app = useApp(); const w = scoped(app.workspace); const ro = app.readonly;
   const [query, setQuery] = useState(''); const [lanes, setLanes] = useState(true); const [attention, setAttention] = useState(false);
   const drag = useDragState();
-  const students = w.students.filter(s => s.status === 'active').sort((a, b) => a.name.localeCompare(b.name));
+  // Quien solo tiene tesis (sin actividades) va al final: su avance se sigue en la vista Tesis.
+  const thesisOnly = (s: Student) => !!s.thesis && !w.assignments.some(a => a.studentId === s.id && isOpen(a));
+  const students = w.students.filter(s => s.status === 'active').sort((a, b) => Number(thesisOnly(a)) - Number(thesisOnly(b)) || a.name.localeCompare(b.name));
   const q = normalize(query.trim());
   const cards = w.assignments.map(a => ({ a, stage: stageOf(a, w) })).filter((c): c is { a: Assignment; stage: Stage } => !!c.stage)
     .filter(({ a }) => !q || normalize(`${a.title} ${w.students.find(s => s.id === a.studentId)?.name ?? ''} ${a.phase ?? ''}`).includes(q))
@@ -130,8 +132,8 @@ function ActivitiesBoard() {
         if (attention && !mine.length && openN > 0) return null;
         return <div key={st.id} className="kb-lane">
           <div className="kb-lane-head">
-            <button type="button" className="kb-person" onClick={() => app.openStudent(st.id)}><StatusAvatar name={st.name} avatar={st.avatar} health={h} size="sm" /><span><strong>{st.name}</strong><small className={openN === 0 ? 'is-idle' : openN > 3 ? 'is-over' : ''}>{openN === 0 ? 'Sin actividad' : openN > 3 ? `${openN} abiertas · sobrecargado` : plural(openN, 'abierta', 'abiertas')}</small></span></button>
-            {!ro && openN === 0 && <Button size="sm" onClick={() => app.modal({ type: 'assignment', studentId: st.id })}><UserPlus size={14} />Asignar</Button>}
+            <button type="button" className="kb-person" onClick={() => app.openStudent(st.id)}><StatusAvatar name={st.name} avatar={st.avatar} health={h} size="sm" /><span><strong>{st.name}</strong>{openN === 0 && st.thesis ? <small className="is-thesis">Tesis · {phaseInfo(st.thesis.phase).short}</small> : <small className={openN === 0 ? 'is-idle' : openN > 3 ? 'is-over' : ''}>{openN === 0 ? 'Sin actividad' : openN > 3 ? `${openN} abiertas · sobrecargado` : plural(openN, 'abierta', 'abiertas')}</small>}</span></button>
+            {!ro && openN === 0 && !st.thesis && <Button size="sm" onClick={() => app.modal({ type: 'assignment', studentId: st.id })}><UserPlus size={14} />Asignar</Button>}
           </div>
           {STAGES.map(s => column(s, mine.filter(c => c.stage === s.id), st.id))}
         </div>;
@@ -300,7 +302,7 @@ function BankBoard() {
       <p className="kb-col-hint">Primero quienes tienen menos trabajo. Suelta una actividad sobre un alumno para asignársela.</p>
       <div className="bank-grid">{students.map(({ s, h, open }) => <div key={s.id} data-drop={`student|${s.id}`} className={`bank-person ${open === 0 ? 'is-idle' : open > 3 ? 'is-over' : ''} ${drag?.over === `student|${s.id}` ? 'is-over-drop' : ''}`}>
         <StatusAvatar name={s.name} avatar={s.avatar} health={h} />
-        <span><strong>{s.name}</strong><small>{open === 0 ? 'Sin actividad' : `${plural(open, 'abierta', 'abiertas')}${open > 3 ? ' · sobrecargado' : ''}`}</small></span>
+        <span><strong>{s.name}</strong><small>{open === 0 ? (s.thesis ? `Tesis · ${phaseInfo(s.thesis.phase).short}` : 'Sin actividad') : `${plural(open, 'abierta', 'abiertas')}${open > 3 ? ' · sobrecargado' : ''}`}</small></span>
       </div>)}</div>
     </section>
   </div>;
@@ -316,13 +318,12 @@ function ThesisBoard() {
   const count = (step: ThesisStep) => people.filter(s => s.thesis!.step === step).length;
   const dragFor = (s: Student): DragItem | undefined => ro ? undefined : {
     id: s.id, title: s.name, person: phaseInfo(s.thesis!.phase).label, avatar: s.avatar, tip: 'Soltar para registrar la llamada',
-    accepts: to => { const t = s.thesis!; const info = phaseInfo(t.phase);
-      if (to === t.phase) return 'Ya está en esta fase';
-      if (t.step !== 'call') return `Primero: ${thesisNext(t.step).label.toLowerCase()}`;
-      if (to === nextPhase(t.phase)) return true;
-      if (to === info.backTo) return true;
-      return 'Solo a la fase siguiente (o usa «Cambiar de fase» en su tesis)'; },
-    drop: to => app.modal({ type: 'thesisStep', student: s, action: to === phaseInfo(s.thesis!.phase).backTo ? 'back' : 'advance' }),
+    accepts: to => to === s.thesis!.phase ? 'Ya está en esta fase' : true,
+    // En la llamada, a la siguiente fase se aprueba (o se regresa a diseño); cualquier otro movimiento pide el motivo.
+    drop: to => { const t = s.thesis!; const call = t.step === 'call';
+      if (call && to === nextPhase(t.phase)) app.modal({ type: 'thesisStep', student: s, action: 'advance' });
+      else if (call && to === phaseInfo(t.phase).backTo) app.modal({ type: 'thesisStep', student: s, action: 'back' });
+      else app.modal({ type: 'thesisStep', student: s, action: 'moved', to: to as ThesisPhase }); },
   };
   return <>
     <div className="board-tools">
@@ -337,7 +338,7 @@ function ThesisBoard() {
         {!people.some(s => s.thesis!.phase === p.id) && <p className="kb-empty">—</p>}
       </div>)}</div>
     </div>
-    {!ro && <p className="board-foot">Primero lo que te toca (revisar, llamadas). Arrastra un tesista a la fase siguiente cuando la aprueben en la llamada; desde Desarrollo matemático también puede regresar a Diseño. Para otros cambios usa «Cambiar de fase» en su tesis.</p>}
+    {!ro && <p className="board-foot">Primero lo que te toca (revisar, llamadas). Arrastra un tesista a otra fase: en la llamada, a la siguiente se aprueba; cualquier otro cambio te pide el motivo y queda en su historial.</p>}
   </>;
 }
 const STEP_ORDER: ThesisStep[] = ['call', 'review', 'kickoff', 'working', 'done'];

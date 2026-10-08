@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { CheckCircle, GraduationCap, CalendarCheck, DotsSixVertical, Hourglass, Pause, Play, UserMinus, WarningCircle, TrendUp, ClockCounterClockwise, CalendarPlus as CalendarAdd, CaretRight, Exam, HourglassMedium, CalendarX, Barricade, Prohibit, UserPlus, ArrowRight, Plus, CalendarPlus, PencilSimple, FlagPennant, UsersThree } from '@phosphor-icons/react';
+import { CheckCircle, GraduationCap, CalendarCheck, DotsSixVertical, Hourglass, Pause, Play, UserMinus, WarningCircle, TrendUp, ClockCounterClockwise, CalendarPlus as CalendarAdd, CaretRight, Exam, HourglassMedium, CalendarX, Barricade, Prohibit, UserPlus, ArrowRight, Plus, CalendarPlus, PencilSimple, FlagPennant, UsersThree, Kanban } from '@phosphor-icons/react';
 import { AREAS, type AreaId, type Assignment, type AuditEvent, type Meeting, type Review, type Student, type Workspace } from '../../shared/types';
 import { useApp } from '../context';
 import { activitySteps, actionsToday, capitalize, currentAssignment, dateKey, dayDiff, dayLabel, assignmentProgress, dueText, firstName, followUp, formatDate, formatTime, HEALTH, HEALTH_GROUPS, inGroup, isLate, isOpen, isPastUnrecorded, meetingsOn, nextReview, upcomingMeetings, normalize, pendingTasks, plural, relativeDay, blockedSince, blockEscalated, isWaiting, pauseOf, PAUSE_LABELS, reviewLabels, reviewsOn, reviewTitle, STALE_DAYS, scoped, studentHealth, timeAgo, today, weekDays, type Health, type HealthGroup, type Task, type TaskKind, type Tone } from '../lib';
@@ -112,6 +112,7 @@ function Today({ areaId, switcher }: { areaId?: AreaId; switcher?: ReactNode }) 
           <span><strong>Hoy llevas {done} de {done + items.length}</strong></span>
           <i><b style={{ width: `${Math.round(done / (done + items.length) * 100)}%` }} /></i>
         </div>}
+        {!ro && <Button variant="secondary" className="rail-board" onClick={() => app.navigate('board', { v: 'day' })}><Kanban size={16} aria-hidden="true" />Abrir mi día en el tablero</Button>}
         {!ro && meetingsOn(w, today()).filter(m => Date.parse(m.startsAt) + m.durationMinutes * 60000 > Date.now()).slice(0, 2).map(m => <p key={m.id} className="rail-meeting"><UsersThree size={15} weight="bold" aria-hidden="true" /><span><strong>Reunión hoy a las {formatTime(m.startsAt)}</strong>{m.title}</span></p>)}
       </section>
       {items.length > 0 && <TaskGroups items={items} health={health} />}

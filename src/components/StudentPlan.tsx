@@ -112,10 +112,13 @@ export function planBand(w: Workspace, student: Student) {
   const period = studentPeriod(w, student);
   return { start: at(period.start), end: period.end ? at(period.end) : null, label: period.explicit ? `Periodo${period.end ? ` · termina el ${formatDate(`${period.end}T12:00:00-06:00`)}` : ''}` : 'Periodo estimado por sus actividades' };
 }
-/** Abre la vista ampliada del Gantt en otra pestaña (o en esta si el navegador la bloquea). */
-export function openGantt(params: Record<string, string>) {
-  const url = `${location.pathname}${location.search}#gantt?${new URLSearchParams(params)}`;
-  if (!window.open(url, '_blank')) location.hash = `gantt?${new URLSearchParams(params)}`;
+/** De dónde se abrió la vista ampliada, para regresar ahí (y reabrir el expediente) al cerrarla. */
+export let ganttReturn: { studentId?: string } | null = null;
+export const setGanttReturn = (v: typeof ganttReturn) => { ganttReturn = v; };
+/** Abre la vista ampliada del Gantt a pantalla completa en esta misma pestaña. */
+export function openGantt(params: Record<string, string>, from: { studentId?: string } = {}) {
+  ganttReturn = from;
+  location.hash = `gantt?${new URLSearchParams(params)}`;
 }
 
 /** Plan del alumno: actividades por fase sobre su periodo, con revisiones y entregas. */
@@ -127,7 +130,7 @@ export default function StudentPlan({ student, size = 'compact', scale }: { stud
     {size === 'compact' && <HoursSummary w={w} student={student} />}
     {outside.length > 0 && <Notice tone="warn" icon={<WarningCircle size={18} weight="fill" />}><p>{outside.length === 1 ? '1 actividad vence' : `${outside.length} actividades vencen`} después del fin de su periodo ({formatDate(`${period.end}T12:00:00-06:00`, { year: 'numeric' })}).</p></Notice>}
     <Gantt rows={planRows(student, w, app.openAssignment)} label={`Plan de ${student.name}`} size={size} scale={scale}
-      onExpand={size === 'compact' ? () => openGantt({ student: student.id }) : undefined}
+      onExpand={size === 'compact' ? () => openGantt({ student: student.id }, { studentId: student.id }) : undefined}
       band={planBand(w, student)}
       empty={<p className="drawer-empty">Sin actividades todavía. Al asignarle una, aparecerá aquí con su fecha de inicio y su fecha límite.</p>} />
     {!period.explicit && size === 'compact' && <p className="footnote">Registra el inicio y el término en «Editar expediente» para ver si el plan cabe en su periodo.</p>}

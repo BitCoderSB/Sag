@@ -76,7 +76,7 @@ export function ThesisPanel({ student }: { student: Student }) {
     <div className="th-links">
       {proposal ? <ExternalLink url={proposal}><FileText size={15} aria-hidden="true" />Pre-propuesta / propuesta</ExternalLink> : <span className="muted"><FileText size={15} aria-hidden="true" />Sin documento de propuesta</span>}
       <ExternalLink url={drive}><FolderOpen size={15} aria-hidden="true" />{safeUrl(t.driveUrl) ? 'Su carpeta en Drive' : 'Carpeta de tesis en Drive'}</ExternalLink>
-      <button type="button" className="ad-inline-link" onClick={() => openGantt({ student: student.id })}><ChartBarHorizontal size={14} aria-hidden="true" />{t.plan?.length ? 'Cronograma' : 'Plan'}</button>
+      <button type="button" className="ad-inline-link" onClick={() => openGantt({ student: student.id }, { studentId: student.id })}><ChartBarHorizontal size={14} aria-hidden="true" />{t.plan?.length ? 'Cronograma' : 'Plan'}</button>
       {editable && <button type="button" className="ad-inline-link" onClick={() => app.modal({ type: 'thesis', student })}>Editar datos</button>}
     </div>
 
@@ -178,10 +178,10 @@ export function ThesisForm({ student, onClose, save, busy, error, done, Footer }
 export interface SaveKit { save: <T>(action: () => Promise<T>, message: string, doneLabel?: string) => void; busy: boolean; error: string; done: string | null; Footer: (p: { busy: boolean; done?: string | null; onClose: () => void; children: ReactNode; danger?: boolean; summary?: ReactNode; cancelLabel?: string }) => ReactElement }
 
 /** Un paso del flujo. En la llamada se decide: aprobar y pasar a la siguiente, corregir en la misma o regresar. */
-export function ThesisStepForm({ student, action: initial, onClose, save, busy, error, done, Footer }: { student: Student; action: ThesisAction; onClose: () => void } & SaveKit) {
+export function ThesisStepForm({ student, action: initial, to: target, onClose, save, busy, error, done, Footer }: { student: Student; action: ThesisAction; to?: ThesisPhase; onClose: () => void } & SaveKit) {
   const t = student.thesis!; const info = phaseInfo(t.phase); const next = nextPhase(t.phase);
   const decision = t.step === 'call' && ['advance', 'stay', 'back'].includes(initial);
-  const [action, setAction] = useState<ThesisAction>(initial); const [note, setNote] = useState(''); const [to, setTo] = useState<ThesisPhase>(t.phase);
+  const [action, setAction] = useState<ThesisAction>(initial); const [note, setNote] = useState(''); const [to, setTo] = useState<ThesisPhase>(target ?? t.phase);
   const [localError, setLocalError] = useState('');
   const needsNote = action === 'stay' || action === 'back' || action === 'moved';
   function submit(e: FormEvent) {

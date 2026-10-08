@@ -164,15 +164,28 @@ test('mobile navigation, search, drawer focus, empty state and calendar controls
   await expect(page.getByRole('dialog')).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
-test('timeline expands to a full-screen view in a new tab', async ({ page, context }) => {
+test('timeline expands to a full-screen view and closes back', async ({ page }) => {
   await login(page);
   await page.goto('/#students?v=timeline');
-  const popup = context.waitForEvent('page');
   await page.getByRole('button', { name: 'Expandir', exact: true }).click();
-  const full = await popup;
-  await expect(full.getByRole('heading', { level: 1, name: 'Cronograma de alumnos' })).toBeVisible();
-  await expect(full.locator('.gantt.is-full .gantt-row').first()).toBeVisible();
-  await full.getByRole('radio', { name: 'Meses', exact: true }).click();
-  await expect(full.locator('.gantt-today-tag')).toBeVisible();
-  await expect(full.locator('.sidebar')).toHaveCount(0);
+  await expect(page.getByRole('heading', { level: 1, name: 'Cronograma de alumnos' })).toBeVisible();
+  await expect(page.locator('.gantt.is-full .gantt-row').first()).toBeVisible();
+  await expect(page.locator('.sidebar')).toHaveCount(0);
+  await page.getByRole('radio', { name: 'Meses', exact: true }).click();
+  await expect(page.locator('.gantt-today-tag')).toBeVisible();
+  await page.getByRole('button', { name: 'Cerrar vista ampliada', exact: true }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Alumnos' })).toBeVisible();
+});
+test('board cards can be dragged with the mouse to another stage', async ({ page }) => {
+  await login(page);
+  await page.goto('/#board');
+  const card = page.locator('[data-drop^="todo|"] .kb-card.is-draggable').first();
+  const lane = (await card.locator('xpath=ancestor::*[@data-drop][1]').getAttribute('data-drop'))!.split('|')[1];
+  const from = (await card.locator('strong').first().boundingBox())!; const to = (await page.locator(`[data-drop="doing|${lane}"]`).boundingBox())!;
+  await page.mouse.move(from.x + 10, from.y + 5); await page.mouse.down();
+  await page.mouse.move(from.x + 40, from.y + 20, { steps: 4 });
+  await expect(page.locator('.drag-ghost')).toBeVisible();
+  await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 8 }); await page.mouse.up();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await page.keyboard.press('Escape');
 });

@@ -8,7 +8,7 @@ import { AreaTag, Avatar, Badge, animalName, Button, CheckDraw, ErrorMessage, Fi
 import { reducedMotion } from '../motion';
 import { FormSection, RichSelect, type PickOption } from './Pickers';
 import { ThesisForm, ThesisStepForm } from './Thesis';
-import type { ThesisAction } from '../../shared/thesis';
+import type { ThesisAction, ThesisPhase } from '../../shared/thesis';
 import AgreementList, { pendingTitle, previousWithPending } from './Agreements';
 import Certificate from './Certificate';
 
@@ -137,7 +137,7 @@ export default function Forms({ state, onClose }: { state: NonNullable<ModalStat
     case 'pause': return <PauseForm student={state.student} kind={state.kind} onClose={onClose} />;
     case 'resume': return <ResumeForm student={state.student} onClose={onClose} />;
     case 'thesis': return <ThesisDialog student={state.student} onClose={onClose} />;
-    case 'thesisStep': return <ThesisDialog student={state.student} action={state.action} onClose={onClose} />;
+    case 'thesisStep': return <ThesisDialog student={state.student} action={state.action} to={state.to} onClose={onClose} />;
   }
 }
 
@@ -587,11 +587,11 @@ function ResumeForm({ student, onClose }: { student: Student; onClose: () => voi
 /* ---------- Tesis (Investigación) ---------- */
 
 /** Los diálogos viven en Thesis.tsx; aquí reciben el guardado y el pie comunes a todos los formularios. */
-function ThesisDialog({ student, action, onClose }: { student: Student; action?: ThesisAction; onClose: () => void }) {
+function ThesisDialog({ student, action, to, onClose }: { student: Student; action?: ThesisAction; to?: ThesisPhase; onClose: () => void }) {
   const kit = useSave(onClose);
   const fresh = useApp().workspace.students.find(s => s.id === student.id) ?? student;
   const save = <T,>(fn: () => Promise<T>, message: string, doneLabel?: string) => { kit.save(fn, message, doneLabel); };
-  return action ? <ThesisStepForm student={fresh} action={action} onClose={onClose} save={save} busy={kit.busy} error={kit.error} done={kit.done} Footer={Footer} />
+  return action ? <ThesisStepForm student={fresh} action={action} to={to} onClose={onClose} save={save} busy={kit.busy} error={kit.error} done={kit.done} Footer={Footer} />
     : <ThesisForm student={fresh} onClose={onClose} save={save} busy={kit.busy} error={kit.error} done={kit.done} Footer={Footer} />;
 }
 

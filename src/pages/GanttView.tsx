@@ -1,11 +1,11 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { CalendarCheck, CrosshairSimple, Printer, X } from '@phosphor-icons/react';
 import type { AreaId } from '../../shared/types';
 import { phaseInfo, STEP_LABEL } from '../../shared/thesis';
 import { useApp } from '../context';
 import { dayDiff, formatDate, hoursProgress, isOpen, plural, scoped, studentHealth, studentPeriod } from '../lib';
 import { Avatar, Button, Empty, IconButton, Segmented } from '../components/ui';
-import StudentPlan, { thesisSchedule } from '../components/StudentPlan';
+import StudentPlan, { ganttReturn, setGanttReturn, thesisSchedule } from '../components/StudentPlan';
 import { Timeline } from './Students';
 import type { GanttScale } from '../components/Gantt';
 
@@ -28,7 +28,13 @@ export default function GanttView() {
   const app = useApp(); const w = app.workspace;
   const [scale, setScale] = useScale(); const [focus, setFocus] = useState(0);
   const student = w.students.find(s => s.id === app.params.get('student'));
-  const close = () => { window.close(); setTimeout(() => app.navigate('students', student ? {} : { v: 'timeline' }), 150); };
+  // Regresa a donde se abrió (y reabre el expediente si venía de ahí); con un enlace directo, a Alumnos.
+  const close = () => {
+    const from = ganttReturn; setGanttReturn(null);
+    if (from) { history.back(); if (from.studentId) { const id = from.studentId; setTimeout(() => app.openStudent(id), 60); } }
+    else app.navigate('students', student ? {} : { v: 'timeline' });
+  };
+  useEffect(() => { const key = (e: KeyboardEvent) => { if (e.key === 'Escape' && !document.querySelector('[role="dialog"], .drawer')) close(); }; window.addEventListener('keydown', key); return () => window.removeEventListener('keydown', key); });
   const tools = <div className="gv-tools">
     <Segmented label="Escala" value={scale} onChange={setScale} options={SCALES} />
     <Button variant="secondary" size="sm" onClick={() => setFocus(f => f + 1)} disabled={scale === 'fit'}><CrosshairSimple size={15} />Hoy</Button>

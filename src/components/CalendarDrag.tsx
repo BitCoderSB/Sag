@@ -20,10 +20,14 @@ export const useDragState = () => useSyncExternalStore(subscribe, () => state);
 let pointer = { x: 0, y: 0 };
 let paint: (() => void) | null = null;
 
-/** Empieza a arrastrar tras moverse unos píxeles; un clic normal sigue funcionando. */
+/** Empieza a arrastrar tras moverse unos píxeles (con el dedo, tras mantenerlo presionado); un clic o toque normal sigue funcionando. */
 export function beginDrag(item: DragItem, e: ReactPointerEvent) {
-  if (e.button !== 0 || e.pointerType === 'touch') return;
-  const sx = e.clientX; const sy = e.clientY; let started = false; let frame = 0;
+  if (e.button !== 0) return;
+  const touch = e.pointerType !== 'mouse';
+  // Con el mouse se evita la selección de texto y el arrastre nativo del navegador, que cancelaban el arrastre.
+  if (!touch) e.preventDefault();
+  const sx = e.clientX; const sy = e.clientY; let started = false; let frame = 0; let hold = 0;
+  pointer = { x: sx, y: sy };
   const update = () => {
     frame = 0;
     const zone = (document.elementFromPoint(pointer.x, pointer.y) as HTMLElement | null)?.closest<HTMLElement>('[data-day], [data-drop]');
@@ -34,15 +38,23 @@ export function beginDrag(item: DragItem, e: ReactPointerEvent) {
     }
     paint?.();
   };
+  const start = () => { started = true; document.body.classList.add('is-dragging'); set({ item, over: null, blocked: false }); if (touch) navigator.vibrate?.(12); if (!frame) frame = requestAnimationFrame(update); };
+  // Con el dedo: mantener presionado para arrastrar; si se mueve antes, es desplazamiento y no se arrastra.
+  if (touch) hold = window.setTimeout(start, 320);
   const move = (ev: PointerEvent) => {
-    if (!started) { if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 6) return; started = true; document.body.classList.add('is-dragging'); set({ item, over: null, blocked: false }); }
+    if (!started) {
+      if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < (touch ? 10 : 6)) return;
+      if (touch) { end(ev); return; }
+      start();
+    }
     ev.preventDefault();
     pointer = { x: ev.clientX, y: ev.clientY };
     if (!frame) frame = requestAnimationFrame(update);
   };
-  const end = (ev: PointerEvent | KeyboardEvent) => {
-    cancelAnimationFrame(frame);
-    window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', end); window.removeEventListener('keydown', esc);
+  const blockScroll = (ev: TouchEvent) => { if (started) ev.preventDefault(); };
+  const end = (ev: Event) => {
+    clearTimeout(hold); cancelAnimationFrame(frame);
+    window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', end); window.removeEventListener('pointercancel', end); window.removeEventListener('keydown', esc); window.removeEventListener('touchmove', blockScroll);
     document.body.classList.remove('is-dragging');
     const drop = started && ev.type === 'pointerup' && state?.over && !state.blocked ? state.over : null;
     if (state) set(null);
@@ -50,7 +62,8 @@ export function beginDrag(item: DragItem, e: ReactPointerEvent) {
     if (drop) item.drop(drop);
   };
   const esc = (ev: KeyboardEvent) => { if (ev.key === 'Escape') end(ev); };
-  window.addEventListener('pointermove', move); window.addEventListener('pointerup', end); window.addEventListener('keydown', esc);
+  window.addEventListener('pointermove', move); window.addEventListener('pointerup', end); window.addEventListener('pointercancel', end); window.addEventListener('keydown', esc);
+  if (touch) window.addEventListener('touchmove', blockScroll, { passive: false });
 }
 
 /** Asa visible en las filas que se pueden llevar al calendario. */
