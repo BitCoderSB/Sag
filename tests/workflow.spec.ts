@@ -148,11 +148,11 @@ test('mobile navigation, search, drawer focus, empty state and calendar controls
   await page.setViewportSize({ width: 390, height: 844 });
   await login(page);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.goto('/#agenda');
-  const calendarTitle = await page.locator('.calendar-title').textContent();
+  // La agenda se retiró: el calendario de Hoy cubre mes y semana.
+  const calendarTitle = await page.locator('.cal-title').textContent();
   await page.getByRole('button', { name: 'Periodo siguiente', exact: true }).click();
-  await expect(page.locator('.calendar-title')).not.toHaveText(calendarTitle ?? '');
-  await page.getByRole('button', { name: 'Hoy', exact: true }).click();
+  await expect(page.locator('.cal-title')).not.toHaveText(calendarTitle ?? '');
+  await page.locator('.cal-today-button').click();
   await page.getByRole('button', { name: 'Abrir menú', exact: true }).click();
   await page.locator('.sidebar .nav-item').filter({ hasText: 'Alumnos' }).click();
   await page.getByLabel('Buscar alumnos', { exact: true }).fill('NingunAlumnoTieneEsteNombre');

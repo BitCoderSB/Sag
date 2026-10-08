@@ -259,7 +259,6 @@ function DayDetail({ w, dayKey, reviewDrag, dueDrag, onClose }: { w: Workspace; 
       {ro && future && <Button className="dd-add" onClick={() => app.modal({ type: 'meeting', date: dayKey })}><CalendarPlus size={16} weight="bold" />Agendar reunión</Button>}
       <Menu label="Más acciones del día" items={[
         ...(!ro && future ? [{ label: 'Programar revisión en este día', icon: <CalendarPlus size={16} />, onSelect: () => app.modal({ type: 'review', date: dayKey }) }] : []),
-        { label: 'Abrir agenda', icon: <CalendarBlank size={16} />, onSelect: () => app.navigate('agenda') },
       ]} />
       <IconButton className="dd-close" label="Cerrar detalle del día" onClick={onClose}><X size={18} /></IconButton>
     </header>

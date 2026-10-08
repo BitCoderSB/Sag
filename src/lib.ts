@@ -163,7 +163,8 @@ export function studentHealth(w: Workspace, s: Student): Health {
   if (open.some(a => a.status === 'pending_review')) return 'review';
   if (open.some(a => isWaiting(a))) return 'waiting';
   if (open.some(a => a.status === 'changes_requested')) return 'changes';
-  return open.length ? 'active' : 'idle';
+  // Una tesis en curso es su trabajo: no cuenta como «sin actividad».
+  return open.length || (s.thesis && s.thesis.step !== 'done') ? 'active' : 'idle';
 }
 export const inGroup = (health: Health, group: HealthGroup) => HEALTH_GROUPS.find(g => g.id === group)!.members.includes(health);
 

@@ -1,16 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Dropdown from '@radix-ui/react-dropdown-menu';
-import { House, Kanban, Sun, Moon, SquaresFour, CalendarBlank, UsersThree, ListChecks, ChartBar, GearSix, Sparkle, MagnifyingGlass, Plus, SignOut, CaretUpDown, List, X, WarningCircle, Check, Eye } from '@phosphor-icons/react';
+import { House, Kanban, Sun, Moon, SquaresFour, UsersThree, ListChecks, ChartBar, GearSix, Sparkle, MagnifyingGlass, Plus, SignOut, CaretUpDown, List, X, WarningCircle, Check, Eye } from '@phosphor-icons/react';
 import type { Session, Workspace, Role } from '../shared/types';
 import { AREAS } from '../shared/types';
-import { api, post, setCsrf, todoCount, scoped, reviewsOn, meetingsOn, today } from './lib';
+import { api, post, setCsrf, todoCount, scoped } from './lib';
 import { AppContext, type ModalState, type Page } from './context';
 import { useIndicator } from './motion';
 import { Avatar, Brand, Button, CreateMenu, Loading, Toast, Empty, AreaIcon, IconButton, areaName } from './components/ui';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Board from './pages/Board';
-import Agenda from './pages/Agenda';
 import Students from './pages/Students';
 import Assignments from './pages/Assignments';
 import Talent from './pages/Talent';
@@ -22,8 +21,8 @@ import AssignmentDrawer from './components/AssignmentDrawer';
 import CommandPalette from './components/CommandPalette';
 import Ambient from './components/Ambient';
 
-const PAGES: Page[] = ['today', 'board', 'agenda', 'students', 'assignments', 'talent', 'reports', 'settings'];
-const TITLES: Record<Page, string> = { today: 'Hoy', board: 'Tablero', agenda: 'Agenda', students: 'Alumnos', assignments: 'Actividades', talent: 'Talento', reports: 'Reportes', settings: 'Configuración' };
+const PAGES: Page[] = ['today', 'board', 'students', 'assignments', 'talent', 'reports', 'settings'];
+const TITLES: Record<Page, string> = { today: 'Hoy', board: 'Tablero', students: 'Alumnos', assignments: 'Actividades', talent: 'Talento', reports: 'Reportes', settings: 'Configuración' };
 function readRoute() {
   const raw = location.hash.slice(1);
   const [path, query = ''] = raw.split('?');
@@ -98,11 +97,9 @@ export default function App() {
   const user = session.user;
   const mine = workspace ? scoped(workspace) : null;
   const taskCount = mine && !readonly ? todoCount(mine) : 0;
-  const todayCount = mine ? reviewsOn(mine, today()).filter(r => r.status === 'scheduled').length + meetingsOn(mine, today()).length : 0;
   const nav: { id: Page; label: string; icon: typeof House; count?: number; urgent?: boolean }[] = [
     { id: 'today', label: readonly ? 'Panorama' : 'Hoy', icon: readonly ? SquaresFour : House, count: taskCount || undefined, urgent: true },
     { id: 'board', label: 'Tablero', icon: Kanban },
-    { id: 'agenda', label: 'Agenda', icon: CalendarBlank, count: todayCount || undefined },
     { id: 'students', label: 'Alumnos', icon: UsersThree },
     { id: 'assignments', label: 'Actividades', icon: ListChecks },
     { id: 'talent', label: 'Talento', icon: Sparkle },
@@ -174,7 +171,6 @@ export default function App() {
           <div key={route.key} className="page">
             {route.page === 'today' && <Dashboard />}
             {route.page === 'board' && <Board />}
-            {route.page === 'agenda' && <Agenda />}
             {route.page === 'students' && <Students />}
             {route.page === 'assignments' && <Assignments />}
             {route.page === 'talent' && <Talent />}

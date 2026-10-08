@@ -4,19 +4,22 @@ import { useApp } from '../context';
 import { pauseOf, PAUSE_LABELS, activitySteps, assignmentProgress, assignmentState, studentStep, cleanDetail, currentAssignment, dueText, formatDate, formatTime, groupSkillAverages, HEALTH, isOpen, plural, post, punctuality, scoped, skillStats, skillTrend, studentHealth } from '../lib';
 import { AreaTag, Badge, Button, Drawer, Empty, ErrorMessage, Field, Menu, Meter, Notice, ProgressRing, Radar, StatusAvatar, Steps, Tabs, areaName } from './ui';
 import ReviewCard from './ReviewCard';
+import { ThesisPanel } from './Thesis';
 import StudentPlan, { HoursSummary } from './StudentPlan';
 import StudentAction from './StudentAction';
 
-type Tab = 'summary' | 'story' | 'plan' | 'skills' | 'notes' | 'history';
+type Tab = 'summary' | 'thesis' | 'story' | 'plan' | 'skills' | 'notes' | 'history';
 
 export default function StudentDrawer({ id, onClose }: { id: string; onClose: () => void }) {
   const { workspace: w, readonly, modal, openAssignment, refresh, toast } = useApp();
   const student = w.students.find(s => s.id === id);
   const own = !!student && student.areaIds.includes(w.user.areaId!); const full = readonly || own; const editable = own && !readonly;
-  const [tab, setTab] = useState<Tab>(full ? 'summary' : 'skills');
+  const [tab, setTab] = useState<Tab>(() => { const s = w.students.find(x => x.id === id); return !full ? 'skills' : s?.thesis && w.user.areaId === 'research' ? 'thesis' : 'summary'; });
   const [note, setNote] = useState(''); const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const lock = useRef(false);
   if (!student) return <Drawer label="Alumno no disponible" onClose={onClose}><div className="drawer-body"><Empty title="No encontramos este expediente" description="Puede que ya no tengas acceso. Cierra el panel y búscalo de nuevo." /></div></Drawer>;
   const scope = scoped(w);
+  // Tesis: alumnos de Investigación, para su responsable y el jefe.
+  const showThesis = student.areaIds.includes('research') && (w.user.areaId === 'research' || readonly) && (!!student.thesis || w.user.areaId === 'research');
   const pause = pauseOf(student, w.user.areaId);
   const health = studentHealth(scope, student);
   const assignments = w.assignments.filter(a => a.studentId === id);
@@ -30,7 +33,7 @@ export default function StudentDrawer({ id, onClose }: { id: string; onClose: ()
   const notes = w.notes.filter(n => n.studentId === id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const entityIds = new Set([id, ...assignments.map(a => a.id), ...reviews.map(r => r.id)]);
   const history = w.audit.filter(a => entityIds.has(a.entityId)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  const tabs: { id: Tab; label: string; count?: number }[] = full ? [{ id: 'summary', label: 'Resumen' }, { id: 'story', label: 'Historia', count: assignments.filter(a => a.status !== 'cancelled').length }, { id: 'plan', label: 'Plan' }, { id: 'skills', label: 'Habilidades', count: stats.length }, { id: 'notes', label: 'Notas', count: notes.length }, { id: 'history', label: 'Historial' }] : [{ id: 'skills', label: 'Habilidades', count: stats.length }];
+  const tabs: { id: Tab; label: string; count?: number }[] = full ? [{ id: 'summary', label: 'Resumen' }, ...(showThesis ? [{ id: 'thesis' as const, label: 'Tesis' }] : []), { id: 'story', label: 'Historia', count: assignments.filter(a => a.status !== 'cancelled').length }, { id: 'plan', label: 'Plan' }, { id: 'skills', label: 'Habilidades', count: stats.length }, { id: 'notes', label: 'Notas', count: notes.length }, { id: 'history', label: 'Historial' }] : [{ id: 'skills', label: 'Habilidades', count: stats.length }];
   const skillName = (skillId: string) => w.skills.find(k => k.id === skillId)?.name ?? 'Habilidad';
   const best = stats[0]; const weakest = stats.length > 1 ? stats[stats.length - 1] : undefined;
   const onTime = punctuality(w, id);
@@ -133,6 +136,7 @@ export default function StudentDrawer({ id, onClose }: { id: string; onClose: ()
         </section>
       </>}
 
+      {tab === 'thesis' && full && showThesis && <ThesisPanel student={student} />}
       {tab === 'story' && full && <StudentStory studentId={id} />}
       {tab === 'plan' && full && <StudentPlan student={student} />}
 

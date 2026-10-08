@@ -9,6 +9,7 @@ import { extname, resolve, sep } from 'node:path';
 import { Store, checkPassword, id, now, publicUser, type StoredSession } from './db.js';
 import { ANIMALS, isAnimal, pickAnimal } from '../shared/avatars.js';
 import { type ActivityDraft, AREAS, type User, type Student, type Assignment, type Review, type Skill, type Evaluation, type Delivery, type StudentNote, type Meeting, type Attachment, type AuditEvent, type Workspace } from '../shared/types.js';
+import { THESIS_PHASES, phaseInfo, applyThesisAction, type Thesis, type ThesisEvent, type ThesisAction, type ThesisPhase } from '../shared/thesis.js';
 
 type AuthRequest = Request & { actor?: User; session?: StoredSession };
 interface FileRecord extends Attachment { storageName: string; mimeType: string }
@@ -23,7 +24,7 @@ const identifier = z.string().min(1).max(100).regex(/^[a-zA-Z0-9_-]+$/);
 const httpUrl = z.string().trim().max(2048).refine(value => { if (!value) return true; try { const url = new URL(value); return ['https:','http:'].includes(url.protocol) && !url.username && !url.password; } catch { return false; } }, 'Usa un enlace http o https válido.');
 const tags = z.array(text(80).min(1)).max(30).transform(a=>[...new Set(a)]);
 const registration = text(40).min(2).regex(/^[\p{L}\p{N}._-]+$/u, 'El identificador no puede contener espacios.').transform(v=>v.toUpperCase());
-const studentShape = { name: text(160).min(2), registration, email: z.union([z.email().max(254),z.literal('')]).default(''), career: text(160).default(''), semester: text(50).default(''), modalities: tags.default([]), technologies: tags.default([]), avatar: z.enum(ANIMALS).optional(), startDate: day.nullable().optional(), endDate: day.nullable().optional(), hoursRequired: z.number().int().min(1).max(5000).nullable().optional() };
+const studentShape = { name: text(160).min(2), registration, email: z.union([z.email().max(254),z.literal('')]).default(''), career: text(160).default(''), semester: text(50).default(''), modalities: tags.default([]), technologies: tags.default([]), avatar: z.enum(ANIMALS).optional(), startDate: day.nullable().optional(), endDate: day.nullable().optional(), hoursRequired: z.number().int().min(1).max(5000).nullable().optional(), phone: text(40).optional() };
 const studentCreate = z.object(studentShape).strict();
 const studentPatch = z.object({ ...studentShape, version: z.number().int().positive(), status: z.enum(['active','paused','completed']) }).strict();
 const assignmentCreate = z.object({ studentId: identifier, title: text(200).min(3), description: text(10000).default(''), project: text(200).default(''), dueAt: date.nullable().default(null), reviewAt: date, skillIds: z.array(identifier).min(1).max(30).transform(a=>[...new Set(a)]), startAt: date.nullable().default(null), phase: text(80).default(''), priority: z.enum(['normal','high']).default('normal'), links: z.array(z.object({ label: text(120).min(1), url: httpUrl.refine(Boolean,'El enlace es obligatorio.') }).strict()).max(20).default([]) }).strict();
@@ -134,7 +135,10 @@ export function createApp(options: AppOptions) {
     const visibleArea = (areaId: string|null) => user.role==='director' || areaId===user.areaId;
     const allAssignments = store.all<Assignment>('assignments');
     const students = store.all<Student>('students').map(s=>{
-      const safe = user.role==='director'||s.areaIds.includes(user.areaId!) ? s : {...s,email:'',career:'',semester:'',modalities:[]};
+      const own = user.role==='director'||s.areaIds.includes(user.areaId!);
+      const safe = own ? s : {...s,email:'',phone:'',career:'',semester:'',modalities:[]};
+      // La tesis es del área de Investigación: otras áreas no ven su avance, enlaces ni historial.
+      if (s.thesis && !(user.role==='director'||(user.areaId==='research'&&s.areaIds.includes('research')))) delete (safe as Student).thesis;
       const pauses = user.role==='director' ? s.pauses : s.pauses?.[user.areaId!] ? {[user.areaId!]:s.pauses[user.areaId!]} : undefined;
       return {...safe,pauses,openAssignmentCount:allAssignments.filter(a=>a.studentId===s.id&&!['completed','cancelled'].includes(a.status)).length};
     });
@@ -209,6 +213,32 @@ export function createApp(options: AppOptions) {
     const pause = student.pauses?.[areaId] ?? fail(409,'Su participación en tu área no está en pausa.');
     const {[areaId]:_,...rest} = student.pauses!;
     const updated = store.transaction(()=>{ const result = store.put<Student>('students',{...student,pauses:rest,version:student.version+1}); audit(user,'student_resumed',student.id,`Retoma su participación (estuvo en pausa desde ${pause.since.slice(0,10)}: ${pauseLabels[pause.kind]}).`); return result; });
+    res.json({student:updated});
+  });
+  // Tesis (Investigación): datos generales y avance por el flujo del responsable.
+  const researchStudent = (req: Request, studentId: string) => { if (actor(req).areaId!=='research') fail(403,'El seguimiento de tesis es del área de Investigación.','RESEARCH_ONLY'); const s = studentFor(req,studentId); if (!s.areaIds.includes('research')) fail(409,'El alumno no está en Investigación.'); return s; };
+  const thesisBody = z.object({ topic: text(300).default(''), estimateMonths: z.number().int().min(1).max(60).nullable().default(null), proposalUrl: httpUrl.default(''), driveUrl: httpUrl.default(''), callAvailability: text(200).default(''), phase: z.enum(THESIS_PHASES.map(p=>p.id) as [ThesisPhase,...ThesisPhase[]]).optional(), step: z.enum(['kickoff','working','review','call']).optional() }).strict();
+  app.put('/api/students/:id/thesis',...mutate,(req,res)=>{
+    const body = thesisBody.parse(req.body); const student = researchStudent(req,String(req.params.id)); const user = actor(req);
+    const prev = student.thesis;
+    const thesis: Thesis = prev ? {...prev,topic:body.topic,estimateMonths:body.estimateMonths,proposalUrl:body.proposalUrl,driveUrl:body.driveUrl,callAvailability:body.callAvailability}
+      : {topic:body.topic,estimateMonths:body.estimateMonths,proposalUrl:body.proposalUrl,driveUrl:body.driveUrl,callAvailability:body.callAvailability,phase:body.phase??'preproposal',step:body.step??'kickoff',startedAt:now(),phaseSince:now(),defendedAt:null,history:[]};
+    const updated = store.transaction(()=>{ const r = store.put<Student>('students',{...student,thesis,modalities:student.modalities.includes('Tesis')?student.modalities:[...student.modalities,'Tesis'],version:student.version+1}); audit(user,prev?'thesis_updated':'thesis_started',student.id,prev?`Datos de tesis actualizados: ${thesis.topic||'sin tema'}.`:`Inicia seguimiento de tesis en ${phaseInfo(thesis.phase).label}.`); return r; });
+    res.json({student:updated});
+  });
+  const actionBody = z.object({ action: z.enum(['kickoff','submitted','reviewed','advance','stay','back','defended','moved']), note: text(2000).default(''), to: z.enum(THESIS_PHASES.map(p=>p.id) as [ThesisPhase,...ThesisPhase[]]).optional(), version: z.number().int().positive() }).strict();
+  app.post('/api/students/:id/thesis/actions',...mutate,(req,res)=>{
+    const body = actionBody.parse(req.body); const student = researchStudent(req,String(req.params.id)); const user = actor(req);
+    checkVersion(student.version,body.version);
+    const t = student.thesis ?? fail(409,'Este alumno aún no tiene seguimiento de tesis.');
+    if ((body.action==='stay'||body.action==='back'||body.action==='moved') && body.note.trim().length<3) fail(400,'Anota qué se debe corregir o por qué cambia de fase.');
+    const outcome = applyThesisAction(t,body.action,now(),body.to);
+    const result = typeof outcome==='string' ? fail(409,outcome) : outcome;
+    const at = now(); const changedPhase = result.phase!==t.phase;
+    const event: ThesisEvent = {id:id('thesis'),at,phase:t.phase,action:body.action,to:changedPhase?result.phase:undefined,note:body.note.trim(),actorName:user.name};
+    const thesis: Thesis = {...t,phase:result.phase,step:result.step,phaseSince:changedPhase?at:t.phaseSince,defendedAt:body.action==='defended'?at:t.defendedAt,history:[...t.history,event]};
+    const verbs: Record<ThesisAction,string> = {kickoff:'Llamada inicial registrada',submitted:'Entregó para revisión',reviewed:'Revisado; llamada pendiente',advance:'Aprobada; pasa a',stay:'Sigue en la misma fase con correcciones',back:'Regresa a',defended:'Defendió su tesis',moved:'Se movió a'};
+    const updated = store.transaction(()=>{ const r = store.put<Student>('students',{...student,thesis,version:student.version+1}); audit(user,'thesis_step',student.id,`Tesis · ${phaseInfo(t.phase).label}: ${verbs[body.action]}${changedPhase?` ${phaseInfo(result.phase).label}`:''}.${body.note.trim()?` ${body.note.trim()}`:''}`); return r; });
     res.json({student:updated});
   });
   app.patch('/api/students/:id',...mutate,(req,res)=>{

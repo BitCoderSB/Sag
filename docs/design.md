@@ -21,13 +21,13 @@ SAG es una herramienta de trabajo diario para cuatro personas. Cada decisión re
   - **Banco**: actividades preparadas sin alumno ni fechas. Se arrastran sobre un alumno (ordenados por menos trabajo) y se abre «Asignar actividad» ya llena, con la opción de conservarla en el banco.
 - **Historia del alumno** (pestaña del expediente): su recorrido como tablero, por fase si las usa o por mes, con el estado y el promedio de cada actividad.
 - **Actividades** es la lista con filtros; su antiguo tablero por estado se reemplazó por la ventana Tablero.
+- **Tesis (Investigación)**: el flujo del responsable (puntos 1–28) en 10 fases: Pre-propuesta, Propuesta, Marco teórico y redacción, Análisis/diseño/simulaciones, Desarrollo matemático, Implementación y prototipo, Pruebas y validación, Diapositivas, Correcciones finales y Defensa. Cada fase repite el ciclo «tesista trabaja → revisas y propones cambios → llamada». En la llamada se decide: aprobar y pasar a la siguiente, corregir en la misma (con nota obligatoria) o, solo desde Desarrollo matemático, regresar a Diseño. La primera fase empieza con la llamada inicial. Se ve en la pestaña «Tesis» del expediente (fase N de 10, ciclo, siguiente acción, datos, enlaces a la propuesta y a la carpeta de Drive, historial), en el Tablero → Tesis (una columna por fase; arrastrar a la fase siguiente registra la aprobación) y en Hoy (grupo «Tesis» con lo que te toca: llamada inicial, revisión o llamada). En el Plan, las fases recorridas aparecen con sus fechas y las que faltan se reparten hasta la entrega estimada. Una tesis en curso cuenta como su trabajo: no aparece como «sin actividad». Solo Investigación y el jefe ven la tesis.
 - **Plan del alumno** (pestaña del expediente): Gantt con una barra por actividad (de su inicio a su fecha límite, color de su estado), rombos de revisión, puntos de entrega, línea de hoy y el periodo del alumno con bordes punteados. Con fases, las actividades se agrupan y se pliegan. Avisa si alguna actividad vence después del fin del periodo. Arriba, el avance de horas con la fecha probable de término.
 - **Cronograma** (Alumnos, vista alterna a la lista): una fila por alumno con su periodo coloreado por situación, fechas límite abiertas y próxima revisión; ordenado por quién termina antes.
 - **Sin seguimiento**: alumno con trabajo, sin cita próxima y sin revisión ni entrega en 14 días. Es un pendiente en Hoy («Programar revisión»), un aviso ámbar en «Próxima revisión» y un filtro.
 - **Acuerdos de revisión**: al registrar una revisión se anotan acuerdos; los pendientes aparecen en la siguiente revisión del alumno y se marcan al instante, sin abrir un diálogo.
 - **Constancia**: desde el expediente («Más acciones», o el botón del jefe), documento imprimible con periodo, horas, actividades terminadas y habilidades con evidencia; se guarda como PDF desde el navegador.
 - **Reportes** incluye la tendencia de 6 meses (terminadas por mes y porcentaje a tiempo) y cómo evoluciona cada habilidad.
-- **Agenda**: calendario de mes y semana con el detalle del día. Para el responsable los colores indican estado (programada, realizada, sin registrar); para el jefe, el área.
 - **Alumnos**: la única lista completa de alumnos. Los grupos de situación (con impedimento, atrasados, por evaluar, al día, sin actividad) usan los mismos nombres y colores que las insignias y que el resumen de Hoy, que enlaza aquí ya filtrado.
 - **Actividades**: lista o tablero; pestañas por estado. Buscar por nombre busca en todos los estados.
 - **Talento**: se elige una habilidad y aparece el ranking con la evidencia (promedio, número de evaluaciones, fecha) y la carga actual.
@@ -37,6 +37,7 @@ SAG es una herramienta de trabajo diario para cuatro personas. Cada decisión re
 ## Tema
 
 - Oscuro por omisión; claro a elección con el selector «Claro / Oscuro» bajo la barra lateral o desde el menú de la cuenta. Sin elección se sigue el tema del sistema. La preferencia se guarda en el navegador y se aplica antes de pintar (sin destello).
+- En claro no hay fondos pastel: etiquetas e insignias son blancas con borde y texto del color del estado; íconos y marcas del calendario usan colores plenos (azul programada, ámbar sin registrar o vencida, verde realizada, negro reunión).
 - El tema claro se define en `src/styles.css` bajo `:root[data-theme="light"]`: tokens propios, una capa generada que invierte superficies y textos del oscuro, y ajustes manuales al final. Al cambiar colores del oscuro, revisar el claro y correr la auditoría en ambos.
 
 ## Formularios

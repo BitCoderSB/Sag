@@ -9,12 +9,17 @@ export type StudentStatus = 'active' | 'paused' | 'completed';
 /** Pausa de la participación en un área (baja temporal, salud, exámenes o sin contacto). Las otras áreas no cambian. */
 export type PauseKind = 'temporary' | 'health' | 'exams' | 'no_contact';
 export interface StudentPause { kind: PauseKind; reason: string; since: string; returnAt: string | null }
+export type { Thesis } from './thesis';
 export interface Student {
   id: string; name: string; registration: string; email: string; career: string;
   semester: string; modalities: string[]; status: StudentStatus; areaIds: AreaId[];
   technologies: string[]; createdAt: string; version: number; openAssignmentCount?: number;
   /** Pausas por área. Cada responsable ve solo la de su área; el jefe, todas. */
   pauses?: Partial<Record<AreaId, StudentPause>>;
+  /** Teléfono o Telegram/WhatsApp de contacto. Privado como el correo. */
+  phone?: string;
+  /** Seguimiento de tesis (área de Investigación). Solo lo ven Investigación y el jefe. */
+  thesis?: import('./thesis').Thesis;
   /** Animal del avatar (ver `shared/avatars.ts`). El servidor lo asigna al crear y rellena los expedientes anteriores. */
   avatar?: AnimalId;
   /** Periodo de participación (AAAA-MM-DD). Opcional: sin él, el plan usa la primera y la última actividad. */

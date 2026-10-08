@@ -199,7 +199,7 @@ test('demo enrichment adds plan data once and never overwrites existing values',
   assert.equal(store.all<Student>('students').length,before);
 });
 test('director schedules meetings with chosen responsables; only invitees see them; responsables cannot create or edit them',async()=>{
-  const director=await client('director'),software=await client('software'),hardware=await client('hardware'),research=await client('research');
+  const director=await client('director'),software=await session('software'),hardware=await session('hardware'),research=await session('research');
   const startsAt=new Date(Date.now()+2*24*3600*1000).toISOString();
   // Un responsable no puede agendar reuniones; el jefe sí, pero sigue sin poder escribir datos de alumnos.
   const denied=await software.request('/api/meetings','POST',{title:'Intento',startsAt,areaIds:['software']});
@@ -475,4 +475,24 @@ test('activity bank: drafts belong to an area and can be edited and removed',asy
   assert.equal(edited.title,'Prueba de carga del API v2');
   await jsonOk(await sw.request(`/api/drafts/${draft.id}`,'DELETE',{}));
   assert.ok(!((await jsonOk(await sw.request('/api/workspace')) as Workspace).drafts??[]).some(d=>d.id===draft.id));
+});
+
+test('thesis workflow: research only, follows the cycle, advances, stays, goes back from math to design',async()=>{
+  const re=await session('research'); const sw=await session('software');
+  const st=(await jsonOk(await re.request('/api/students','POST',{name:'Tesista Prueba',registration:'TES-TEST-1',modalities:['Tesis'],phone:'221 000 0000'}),201)).student as Student;
+  assert.equal((await sw.request(`/api/students/${st.id}/thesis`,'PUT',{topic:'X'})).status,403);
+  let s=(await jsonOk(await re.request(`/api/students/${st.id}/thesis`,'PUT',{topic:'Visión por computadora',estimateMonths:6,driveUrl:'https://drive.google.com/x'}))).student as Student;
+  assert.equal(s.thesis!.phase,'preproposal'); assert.equal(s.thesis!.step,'kickoff');
+  const act=async(action:string,extra:Record<string,unknown>={})=>{ const r=await re.request(`/api/students/${st.id}/thesis/actions`,'POST',{action,version:s.version,...extra}); if(r.status===200) s=(await r.json()).student; return r.status; };
+  assert.equal(await act('advance'),409); // no se puede aprobar sin pasar por la llamada
+  assert.equal(await act('kickoff'),200); assert.equal(await act('submitted'),200); assert.equal(await act('reviewed'),200);
+  assert.equal(await act('stay'),400); // pedir correcciones exige nota
+  assert.equal(await act('stay',{note:'Delimitar el tema'}),200); assert.equal(s.thesis!.phase,'preproposal'); assert.equal(s.thesis!.step,'working');
+  await act('moved',{to:'math',note:'Importado: ya estaba en desarrollo matemático'});
+  await act('submitted'); await act('reviewed');
+  assert.equal(await act('back',{note:'Las simulaciones no sostienen el modelo'}),200); assert.equal(s.thesis!.phase,'design');
+  await act('submitted'); await act('reviewed'); assert.equal(await act('advance'),200); assert.equal(s.thesis!.phase,'math');
+  assert.ok(s.thesis!.history.length>=8);
+  const fromSoftware=(await jsonOk(await sw.request('/api/workspace')) as Workspace).students.find(x=>x.id===st.id);
+  assert.equal(fromSoftware?.thesis,undefined); assert.equal(fromSoftware?.phone,'');
 });

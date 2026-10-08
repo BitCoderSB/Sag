@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { CheckCircle, CalendarCheck, DotsSixVertical, Hourglass, Pause, Play, UserMinus, WarningCircle, TrendUp, ClockCounterClockwise, CalendarPlus as CalendarAdd, CaretRight, Exam, HourglassMedium, CalendarX, Barricade, Prohibit, UserPlus, ArrowRight, Plus, CalendarPlus, PencilSimple, FlagPennant, UsersThree } from '@phosphor-icons/react';
+import { CheckCircle, GraduationCap, CalendarCheck, DotsSixVertical, Hourglass, Pause, Play, UserMinus, WarningCircle, TrendUp, ClockCounterClockwise, CalendarPlus as CalendarAdd, CaretRight, Exam, HourglassMedium, CalendarX, Barricade, Prohibit, UserPlus, ArrowRight, Plus, CalendarPlus, PencilSimple, FlagPennant, UsersThree } from '@phosphor-icons/react';
 import { AREAS, type AreaId, type Assignment, type AuditEvent, type Meeting, type Review, type Student, type Workspace } from '../../shared/types';
 import { useApp } from '../context';
 import { activitySteps, actionsToday, capitalize, currentAssignment, dateKey, dayDiff, dayLabel, assignmentProgress, dueText, firstName, followUp, formatDate, formatTime, HEALTH, HEALTH_GROUPS, inGroup, isLate, isOpen, isPastUnrecorded, meetingsOn, nextReview, upcomingMeetings, normalize, pendingTasks, plural, relativeDay, blockedSince, blockEscalated, isWaiting, pauseOf, PAUSE_LABELS, reviewLabels, reviewsOn, reviewTitle, STALE_DAYS, scoped, studentHealth, timeAgo, today, weekDays, type Health, type HealthGroup, type Task, type TaskKind, type Tone } from '../lib';
@@ -9,6 +9,8 @@ import Calendar from '../components/Calendar';
 import StudentAction from '../components/StudentAction';
 import MeetingCard from '../components/MeetingCard';
 import { beginDrag, type DragItem } from '../components/CalendarDrag';
+import { thesisNext } from '../components/Thesis';
+import { phaseInfo, STEP_LABEL } from '../../shared/thesis';
 
 export default function Dashboard() {
   const { readonly } = useApp();
@@ -16,11 +18,12 @@ export default function Dashboard() {
 }
 
 const todayLabel = () => capitalize(formatDate(new Date(), { weekday: 'long', month: 'long' }));
-export type Kind = TaskKind | 'stale' | 'idle' | 'today_review' | 'today_due' | 'resume' | 'next' | 'dropout';
+export type Kind = TaskKind | 'stale' | 'idle' | 'today_review' | 'today_due' | 'resume' | 'next' | 'dropout' | 'thesis';
 // Cada pendiente dice la acción que le toca al responsable: él registra revisiones, entregas, calificaciones e impedimentos.
 export const KIND: Record<Kind, { tone: Tone; action: string }> = {
   blocked: { tone: 'warn', action: 'Resolver' },
   resume: { tone: 'neutral', action: 'Retomar' },
+  thesis: { tone: 'info', action: 'Registrar' },
   next: { tone: 'neutral', action: 'Asignar siguiente' },
   dropout: { tone: 'warn', action: 'Pausar participación' },
   unrecorded: { tone: 'warn', action: 'Registrar revisión' },
@@ -43,6 +46,7 @@ const DROPOUT_DAYS = 21;
 const GROUPS: { id: string; label: string; hint: string; tone: Tone; icon: typeof Exam; kinds: Kind[] }[] = [
   { id: 'resume', label: '¿Retoman?', hint: 'Llegó la fecha de regreso que pusiste al pausarlos.', tone: 'neutral', icon: Play, kinds: ['resume'] },
   { id: 'idle', label: 'Sin actividad', hint: 'Un alumno siempre debe tener algo asignado. Dale su siguiente actividad.', tone: 'idle', icon: UserPlus, kinds: ['idle'] },
+  { id: 'thesis', label: 'Tesis', hint: 'Llamadas y revisiones del flujo de tesis que te tocan. Las que están trabajando no aparecen aquí.', tone: 'info', icon: GraduationCap, kinds: ['thesis'] },
   { id: 'blocked', label: 'Revisar impedimentos', hint: 'Llegó la fecha que pusiste para revisarlos. Resuélvelos o sigue esperando.', tone: 'warn', icon: Barricade, kinds: ['blocked'] },
   { id: 'unrecorded', label: 'Revisiones sin registrar', hint: 'Ya pasaron y no anotaste si se hicieron ni qué se acordó.', tone: 'warn', icon: CalendarX, kinds: ['unrecorded'] },
   { id: 'today', label: 'Para hoy', hint: 'Revisiones de hoy y entregas que vencen hoy. Regístralas al recibirlas.', tone: 'neutral', icon: CalendarCheck, kinds: ['today_review', 'today_due'] },
@@ -129,6 +133,8 @@ export function buildItems(w: Workspace, active: Student[], health: Map<string, 
     ...w.assignments.filter(a => isOpen(a) && a.status !== 'pending_review' && !a.blockedReason && a.dueAt && dateKey(a.dueAt) === today() && Date.parse(a.dueAt) >= now && !delivered(a.id))
       .map(a => ({ key: `today-due-${a.id}`, kind: 'today_due' as const, studentId: a.studentId, assignment: a, date: a.dueAt! })),
     ...active.filter(s => !['idle', 'waiting'].includes(health.get(s.id)!) && followUp(w, s).stale).map(s => ({ key: `stale-${s.id}`, kind: followUp(w, s).days >= DROPOUT_DAYS ? 'dropout' as const : 'stale' as const, studentId: s.id, date: followUp(w, s).last })),
+    // Tesis: solo los pasos que dependen del responsable (llamada inicial, revisión, llamada de decisión).
+    ...active.filter(s => s.thesis && ['kickoff', 'review', 'call'].includes(s.thesis.step)).map(s => ({ key: `thesis-${s.id}`, kind: 'thesis' as const, studentId: s.id, date: s.thesis!.phaseSince })),
     // Pausas cuyo regreso ya llegó.
     ...w.students.filter(s => { const p = pauseOf(s, w.user.areaId); return !!p?.returnAt && p.returnAt <= today(); }).map(s => ({ key: `resume-${s.id}`, kind: 'resume' as const, studentId: s.id, date: pauseOf(s, w.user.areaId)!.returnAt! })),
     // Su única actividad ya se entregó o vence en pocos días: preparar la siguiente antes de que se quede sin trabajo.
@@ -170,7 +176,8 @@ export function useTaskAction(item: Item) {
   const a = item.assignment; const r = item.review;
   return () => {
     const student = app.workspace.students.find(s => s.id === item.studentId);
-    if (item.kind === 'idle' || item.kind === 'next') app.modal({ type: 'assignment', studentId: item.studentId });
+    if (item.kind === 'thesis' && student?.thesis) app.modal({ type: 'thesisStep', student, action: student.thesis.step === 'call' ? 'advance' : thesisNext(student.thesis.step).action! });
+    else if (item.kind === 'idle' || item.kind === 'next') app.modal({ type: 'assignment', studentId: item.studentId });
     else if (item.kind === 'resume' && student) app.modal({ type: 'resume', student });
     else if (item.kind === 'dropout' && student) app.modal({ type: 'pause', student, kind: 'no_contact' });
     else if (item.kind === 'stale') app.modal({ type: 'review', studentId: item.studentId });
@@ -184,7 +191,7 @@ export function useTaskAction(item: Item) {
 /** Un pendiente que se suelta en un día abre el diálogo que corresponde, con esa fecha ya puesta. */
 function useTaskDrag(item: Item): DragItem | undefined {
   const app = useApp(); const w = app.workspace;
-  if (app.readonly || item.kind === 'resume' || item.kind === 'dropout') return undefined;
+  if (app.readonly || item.kind === 'resume' || item.kind === 'dropout' || item.kind === 'thesis') return undefined;
   const student = w.students.find(s => s.id === item.studentId); const a = item.assignment; const r = item.review;
   const drop = (day: string) => {
     if ((item.kind === 'unrecorded' || item.kind === 'today_review') && r) app.modal({ type: 'reviewUpdate', review: r, mode: 'reschedule', date: day });
@@ -204,6 +211,7 @@ export function itemDetail(item: Item, w: Workspace) {
     case 'today_review': return r ? `${Date.parse(r.startsAt) < Date.now() ? 'Fue hoy' : 'Hoy'} a las ${formatTime(r.startsAt)} · ${reviewLabels[r.type]}` : '';
     case 'today_due': return a?.dueAt ? `Vence hoy a las ${formatTime(a.dueAt)}` : 'Vence hoy';
     case 'blocked': return a ? `${a.blockedReason} · ${blockedSince(a)}${blockEscalated(a) ? ' · sin revisar' : ''}` : '';
+    case 'thesis': { const s = w.students.find(x => x.id === item.studentId); const t = s?.thesis; return t ? `${STEP_LABEL[t.step]} · ${t.step === 'review' ? `entregó ${relativeDay(t.phaseSince)}` : `fase ${phaseInfo(t.phase).n} de 10`}` : ''; }
     case 'resume': { const s = w.students.find(x => x.id === item.studentId); const p = s && pauseOf(s, w.user.areaId); return p ? `${PAUSE_LABELS[p.kind]} · regreso previsto ${relativeDay(`${p.returnAt}T12:00:00-06:00`)}` : ''; }
     case 'next': return a ? a.status === 'pending_review' ? 'Su actividad ya está entregada' : `Su única actividad vence ${relativeDay(a.dueAt!)}` : '';
     case 'dropout': { const s = w.students.find(x => x.id === item.studentId); return s ? `${followUp(w, s).days} días sin revisión ni entrega` : ''; }
@@ -218,7 +226,7 @@ function TaskRow({ item, exiting, health }: { item: Item; exiting: boolean; heal
   const student = w.students.find(s => s.id === item.studentId);
   const a = item.assignment; const r = item.review;
   const act = useTaskAction(item); const detail = itemDetail(item, scoped(w)); const drag = useTaskDrag(item);
-  const title = item.kind === 'next' ? 'Su siguiente actividad' : a?.title ?? (r ? reviewTitle(r, w) : item.kind === 'idle' ? 'Asignarle una actividad' : item.kind === 'stale' ? 'Programar su siguiente revisión' : item.kind === 'resume' ? '¿Retoma su participación?' : item.kind === 'dropout' ? 'Sin contacto' : 'Seguimiento general');
+  const title = item.kind === 'thesis' && student?.thesis ? `Tesis · ${phaseInfo(student.thesis.phase).label}` : item.kind === 'next' ? 'Su siguiente actividad' : a?.title ?? (r ? reviewTitle(r, w) : item.kind === 'idle' ? 'Asignarle una actividad' : item.kind === 'stale' ? 'Programar su siguiente revisión' : item.kind === 'resume' ? '¿Retoma su participación?' : item.kind === 'dropout' ? 'Sin contacto' : 'Seguimiento general');
   const tone = item.kind === 'blocked' && a && blockEscalated(a) ? 'danger' : KIND[item.kind].tone;
   // Dos salidas cuando hay que decidir: resolver o seguir esperando; retomar o extender la pausa.
   const second = app.readonly ? null : item.kind === 'blocked' && a ? <Button size="sm" variant="secondary" className="tg-action" onClick={() => app.modal({ type: 'block', assignment: a, mode: 'wait' })}>Esperar más</Button>
@@ -234,7 +242,7 @@ function TaskRow({ item, exiting, health }: { item: Item; exiting: boolean; heal
     {drag && <span className="tg-grip" title="Arrastra a un día del calendario" aria-hidden="true"><DotsSixVertical size={16} weight="bold" /></span>}
     {detail && <span className={`tg-detail ${item.kind === 'blocked' ? 'is-wrap' : ''}`}>{detail}</span>}
     {!app.readonly && (second ? <span className="tg-actions"><Button size="sm" className="tg-action" tabIndex={exiting ? -1 : undefined} onClick={act}>{KIND[item.kind].action}</Button>{second}</span>
-      : <Button size="sm" className="tg-action" variant={item.kind === 'next' ? 'secondary' : 'primary'} tabIndex={exiting ? -1 : undefined} onClick={act}>{KIND[item.kind].action}</Button>)}
+      : <Button size="sm" className="tg-action" variant={item.kind === 'next' ? 'secondary' : 'primary'} tabIndex={exiting ? -1 : undefined} onClick={act}>{item.kind === 'thesis' && student?.thesis ? thesisNext(student.thesis.step).label : KIND[item.kind].action}</Button>)}
   </li>;
 }
 
@@ -314,7 +322,7 @@ function Roster({ w, students, health, filter, onFilter, paused = [] }: { w: Wor
             <StatusAvatar name={s.name} avatar={s.avatar} health={h} />
             <span><strong>{s.name}</strong><small className={`health-text tone-${HEALTH[h].dot}`}><i className="legend-dot" aria-hidden="true" />{HEALTH[h].label}</small></span>
           </button></td>
-          <td className="col-md c-show">{current ? <span className="cell-progress"><Steps {...activitySteps(current, w)} /><span className="cell-stack"><span className="cell-title">{current.title}</span><small>{isWaiting(current) ? `En espera hasta el ${formatDate(`${current.blockedReviewAt}T12:00:00-06:00`, { weekday: 'short' })}` : dueText(current)}{(() => { const p = assignmentProgress(current, w); return p !== null && p < 100 ? ` · ${p} %` : ''; })()}</small></span></span> : <span className="muted">Ninguna</span>}</td>
+          <td className="col-md c-show">{current ? <span className="cell-progress"><Steps {...activitySteps(current, w)} /><span className="cell-stack"><span className="cell-title">{current.title}</span><small>{isWaiting(current) ? `En espera hasta el ${formatDate(`${current.blockedReviewAt}T12:00:00-06:00`, { weekday: 'short' })}` : dueText(current)}{(() => { const p = assignmentProgress(current, w); return p !== null && p < 100 ? ` · ${p} %` : ''; })()}</small></span></span> : s.thesis ? <span className="cell-stack"><span className="cell-title">Tesis · {phaseInfo(s.thesis.phase).label}</span><small>{STEP_LABEL[s.thesis.step]}</small></span> : <span className="muted">Ninguna</span>}</td>
           <td className="col-lg"><NextReviewCell next={next} follow={h === 'waiting' ? { ...follow, stale: false } : follow} idle={h === 'idle'} /></td>
           <td className="cell-actions">{!app.readonly && <span className="row-actions"><StudentAction student={s} /><Menu label={`Más acciones para ${s.name}`} items={[
             ...(current ? [{ label: 'Registrar avance o entrega', icon: <TrendUp size={16} />, onSelect: () => app.modal({ type: 'progress', assignment: current }) }] : []),
@@ -365,7 +373,7 @@ function LabOverview({ switcher, onArea }: { switcher: ReactNode; onArea: (area:
         { id: 'late', label: 'Atrasadas', value: s.assignments.filter(a => isLate(a, s)).length, tone: 'warn', go: () => app.navigate('assignments', { area: area.id, status: 'late' }) },
         { id: 'review', label: 'Por evaluar', value: s.assignments.filter(a => a.status === 'pending_review').length, tone: 'info', go: () => app.navigate('assignments', { area: area.id, status: 'pending_review' }) },
         { id: 'blocked', label: 'Con impedimento', value: s.assignments.filter(a => isOpen(a) && !!a.blockedReason).length, tone: 'danger', go: () => app.navigate('assignments', { area: area.id, status: 'blocked' }) },
-        { id: 'unrecorded', label: 'Revisiones sin registrar', value: pendingTasks(s).filter(t => t.kind === 'unrecorded').length, tone: 'warn', go: () => app.navigate('agenda', { area: area.id }) },
+        { id: 'unrecorded', label: 'Revisiones sin registrar', value: pendingTasks(s).filter(t => t.kind === 'unrecorded').length, tone: 'warn', go: () => onArea(area.id) },
         { id: 'stale', label: 'Sin seguimiento', value: stale, tone: 'warn', go: () => onArea(area.id) },
         { id: 'idle', label: 'Alumnos sin actividad', value: active.filter(x => health.get(x.id) === 'idle').length, tone: 'neutral', go: () => app.navigate('students', { area: area.id, f: 'idle' }) },
       ] as const,
@@ -419,7 +427,7 @@ function LabOverview({ switcher, onArea }: { switcher: ReactNode; onArea: (area:
           {meetings.length ? <div className="stack">{meetings.map(m => <MeetingCard key={m.id} meeting={m} withDate />)}</div> : <p className="side-empty">Sin reuniones agendadas con los responsables.</p>}
         </section>
         <section aria-labelledby="overview-agenda">
-          <SectionTitle id="overview-agenda" title={isToday ? 'Revisiones de hoy' : `Revisiones del ${formatDate(`${selected}T12:00:00-06:00`, { weekday: 'long' })}`} count={agenda.length}><TextLink onClick={() => app.navigate('agenda')}>Agenda</TextLink></SectionTitle>
+          <SectionTitle id="overview-agenda" title={isToday ? 'Revisiones de hoy' : `Revisiones del ${formatDate(`${selected}T12:00:00-06:00`, { weekday: 'long' })}`} count={agenda.length} />
           {agenda.length ? <ol className="day-line">{agenda.map(r => <li key={r.id} className={`day-item ${r.status === 'completed' ? 'is-done' : isPastUnrecorded(r) ? 'is-due' : ''}`}>
             <span className="day-time">{formatTime(r.startsAt)}</span>
             <span className="day-dot" aria-hidden="true" />

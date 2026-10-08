@@ -23,6 +23,7 @@ Que cada responsable sepa al entrar qué tiene que hacer hoy y cómo van sus alu
 - Flujo central: alta del alumno → asignación de actividad (alumno, plazo de entrega, primera revisión, habilidades a evaluar, enlaces y documentos) → revisiones programadas → registro de entrega (completa, parcial o no entregó) → evaluación por habilidad de 0 a 10 → finalizar o pedir correcciones.
 - Un alumno tiene un expediente único y puede pertenecer a varias áreas.
 - Las evaluaciones alimentan la búsqueda de talento entre las tres áreas.
+- Investigación da seguimiento a tesistas con un flujo de 10 fases (pre-propuesta a defensa) que el responsable avanza en llamadas (2026-10-07). La carpeta de Drive del área concentra propuestas y documentos.
 - Fechas en horario de Ciudad de México.
 
 ## Capabilities and Constraints

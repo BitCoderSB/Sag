@@ -2,7 +2,7 @@ import { createContext, useContext } from 'react';
 import type { AreaId, PauseKind } from '../shared/types';
 import type { ActivityDraft, Student, Workspace, Assignment, Review, Meeting } from '../shared/types';
 
-export type Page = 'today' | 'board' | 'agenda' | 'students' | 'assignments' | 'talent' | 'reports' | 'settings';
+export type Page = 'today' | 'board' | 'students' | 'assignments' | 'talent' | 'reports' | 'settings';
 export type ModalState =
   | { type: 'student'; student?: Student }
   | { type: 'assignment'; studentId?: string; dueDate?: string; draft?: ActivityDraft }
@@ -14,6 +14,8 @@ export type ModalState =
   | { type: 'block'; assignment: Assignment; mode: 'mark' | 'wait' | 'resolve' }
   | { type: 'pause'; student: Student; kind?: PauseKind }
   | { type: 'resume'; student: Student }
+  | { type: 'thesis'; student: Student }
+  | { type: 'thesisStep'; student: Student; action: import('../shared/thesis').ThesisAction }
   | { type: 'delivery'; assignment: Assignment; kind?: 'partial' | 'complete' }
   | { type: 'progress'; studentId?: string; assignment?: Assignment; kind?: 'partial' | 'complete' }
   | { type: 'certificate'; studentId: string }

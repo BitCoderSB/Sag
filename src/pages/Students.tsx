@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Plus, CalendarPlus, PencilSimple, UsersThree, UserPlus, TrendUp, Rows, ChartBarHorizontal } from '@phosphor-icons/react';
 import { AREAS, type AreaId, type Student, type Workspace } from '../../shared/types';
 import { useApp } from '../context';
+import { phaseInfo, STEP_LABEL } from '../../shared/thesis';
 import { activitySteps, currentAssignment, DAY, dueText, followUp, formatDate, HEALTH, isOpen, studentPeriod, type Health, HEALTH_GROUPS, inGroup, nextReview, normalize, plural, scoped, studentHealth, type HealthGroup } from '../lib';
 import { AreaTag, Badge, StatusAvatar, Steps, Button, Empty, FilterTabs, Menu, NextReviewCell, PageHeader, Search, Segmented, Select } from '../components/ui';
 import Gantt, { type GanttRow } from '../components/Gantt';
@@ -51,7 +52,7 @@ export default function Students() {
               <StatusAvatar name={s.name} avatar={s.avatar} health={health} />
               <span><strong>{s.name}</strong><small>{[s.registration, ...s.modalities].join(' · ')}</small></span>
             </button></td>
-            <td className="col-md c-show">{current ? <span className="cell-progress"><Steps {...activitySteps(current, w)} /><span className="cell-stack"><span className="cell-title">{current.title}</span><small>{dueText(current)}</small></span></span> : <span className="muted">Ninguna</span>}</td>
+            <td className="col-md c-show">{current ? <span className="cell-progress"><Steps {...activitySteps(current, w)} /><span className="cell-stack"><span className="cell-title">{current.title}</span><small>{dueText(current)}</small></span></span> : s.thesis ? <span className="cell-stack"><span className="cell-title">Tesis · {phaseInfo(s.thesis.phase).label}</span><small>{STEP_LABEL[s.thesis.step]}</small></span> : <span className="muted">Ninguna</span>}</td>
             <td className="c-end c-top"><Badge tone={HEALTH[health].tone} dot={HEALTH[health].dot}>{HEALTH[health].label}</Badge></td>
             <td className="col-lg"><NextReviewCell next={next} follow={follow} idle={health === 'idle'} /></td>
             {app.readonly && <td className="col-lg"><span className="tag-row">{s.areaIds.map(id => <AreaTag key={id} id={id} />)}</span></td>}

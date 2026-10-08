@@ -3,6 +3,7 @@ import type { Assignment, Student, Workspace } from '../../shared/types';
 import { useApp } from '../context';
 import { assignmentProgress, assignmentState, dateKey, DAY, formatDate, hoursProgress, plural, studentPeriod, type Tone } from '../lib';
 import Gantt, { type GanttRow, type GanttTone } from './Gantt';
+import { phaseInfo, STEP_LABEL, THESIS_PHASES, type ThesisPhase } from '../../shared/thesis';
 import { Notice, ProgressRing } from './ui';
 
 const at = (key: string) => Date.parse(`${key}T12:00:00-06:00`);
@@ -27,12 +28,32 @@ export function HoursSummary({ w, student }: { w: Workspace; student: Student })
   </div>;
 }
 
+/** Fases de la tesis en el Gantt: recorridas (con sus fechas reales), la actual hasta hoy y las que faltan,
+ *  repartidas hasta la entrega estimada. Un regreso de fase aparece como otra barra de la misma fase. */
+function thesisRows(student: Student): GanttRow[] {
+  const t = student.thesis; if (!t) return [];
+  const segments: { phase: ThesisPhase; start: number; end: number }[] = [];
+  let phase: ThesisPhase = t.history[0]?.phase ?? t.phase; let since = Date.parse(t.startedAt);
+  for (const e of t.history) if (e.to && e.to !== phase) { segments.push({ phase, start: since, end: Date.parse(e.at) }); phase = e.to; since = Date.parse(e.at); }
+  const now = Date.now(); const finished = t.step === 'done';
+  segments.push({ phase, start: since, end: finished ? Date.parse(t.defendedAt ?? t.phaseSince) : Math.max(now, since + DAY) });
+  const rows: GanttRow[] = segments.map((s, i) => { const info = phaseInfo(s.phase); const current = i === segments.length - 1 && !finished;
+    return { id: `thesis-${i}`, label: `${info.n}. ${info.label}`, sub: current ? STEP_LABEL[t.step] : 'Aprobada', group: 'Tesis', start: s.start, end: s.end, tone: current ? 'info' : 'ok', progress: current ? null : 100,
+      describe: `${info.label}: del ${formatDate(new Date(s.start))} al ${current ? 'hoy' : formatDate(new Date(s.end))}.` }; });
+  // Proyección: las fases que faltan, repartidas entre hoy y la entrega estimada.
+  const idx = THESIS_PHASES.findIndex(p => p.id === t.phase); const remaining = finished ? [] : THESIS_PHASES.slice(idx + 1);
+  const due = t.estimateMonths ? Date.parse(t.startedAt) + t.estimateMonths * 30.44 * DAY : null;
+  if (remaining.length && due && due > now) { const step = (due - now) / remaining.length;
+    remaining.forEach((p, i) => rows.push({ id: `thesis-plan-${p.id}`, label: `${p.n}. ${p.label}`, sub: 'Estimada', group: 'Tesis', start: now + i * step, end: now + (i + 1) * step, tone: 'idle', describe: `${p.label}: estimada del ${formatDate(new Date(now + i * step))} al ${formatDate(new Date(now + (i + 1) * step))}.` })); }
+  return rows;
+}
+
 /** Plan del alumno: actividades por fase sobre su periodo, con revisiones y entregas. */
 export default function StudentPlan({ student }: { student: Student }) {
   const app = useApp(); const w = app.workspace;
   const period = studentPeriod(w, student);
   const assignments = w.assignments.filter(a => a.studentId === student.id).sort((a, b) => (a.startAt ?? a.createdAt).localeCompare(b.startAt ?? b.createdAt));
-  const phases = assignments.some(a => a.phase);
+  const phases = assignments.some(a => a.phase) || !!student.thesis;
   const rows: GanttRow[] = assignments.map(a => {
     const start = Date.parse(a.startAt ?? a.createdAt); const end = barEnd(a, start);
     const state = assignmentState(a, w);
@@ -45,6 +66,7 @@ export default function StudentPlan({ student }: { student: Student }) {
       describe: `${a.title}: del ${formatDate(new Date(start))} al ${formatDate(new Date(end))}. ${state.label}.${(() => { const p = assignmentProgress(a, w); return p !== null && p < 100 ? ` Avance ${p} %.` : ''; })()} ${plural(reviews.length, 'revisión', 'revisiones')}, ${plural(deliveries.length, 'entrega', 'entregas')}.`,
     };
   });
+  rows.unshift(...thesisRows(student));
   const general = w.reviews.filter(r => r.studentId === student.id && !r.assignmentId && r.status !== 'cancelled');
   if (general.length) rows.push({ id: 'general', label: 'Seguimiento general', sub: plural(general.length, 'revisión', 'revisiones'), group: phases ? 'Seguimiento' : undefined,
     markers: general.map(r => ({ at: Date.parse(r.startsAt), kind: r.status === 'completed' ? 'review-done' : 'review', title: `Revisión ${formatDate(r.startsAt)}` })),

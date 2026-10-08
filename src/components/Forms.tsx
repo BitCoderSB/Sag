@@ -7,6 +7,8 @@ import { ANIMALS, pickAnimal, type AnimalId } from '../../shared/avatars';
 import { AreaTag, Avatar, Badge, animalName, Button, CheckDraw, ErrorMessage, Field, IconButton, Modal, Notice, Radar, RollingNumber, Segmented, Select } from './ui';
 import { reducedMotion } from '../motion';
 import { FormSection, RichSelect, type PickOption } from './Pickers';
+import { ThesisForm, ThesisStepForm } from './Thesis';
+import type { ThesisAction } from '../../shared/thesis';
 import AgreementList, { pendingTitle, previousWithPending } from './Agreements';
 import Certificate from './Certificate';
 
@@ -134,6 +136,8 @@ export default function Forms({ state, onClose }: { state: NonNullable<ModalStat
     case 'block': return <BlockForm assignment={state.assignment} mode={state.mode} onClose={onClose} />;
     case 'pause': return <PauseForm student={state.student} kind={state.kind} onClose={onClose} />;
     case 'resume': return <ResumeForm student={state.student} onClose={onClose} />;
+    case 'thesis': return <ThesisDialog student={state.student} onClose={onClose} />;
+    case 'thesisStep': return <ThesisDialog student={state.student} action={state.action} onClose={onClose} />;
   }
 }
 
@@ -143,7 +147,7 @@ const MODALITIES = ['Prácticas', 'Servicio social', 'Tesis', 'Investigación'];
 function StudentForm({ student, onClose }: { student?: Student; onClose: () => void }) {
   const { workspace, openStudent } = useApp(); const areaId = workspace.user.areaId!;
   const [name, setName] = useState(student?.name ?? ''); const [registration, setRegistration] = useState(student?.registration ?? '');
-  const [email, setEmail] = useState(student?.email ?? ''); const [career, setCareer] = useState(student?.career ?? ''); const [semester, setSemester] = useState(student?.semester ?? '');
+  const [email, setEmail] = useState(student?.email ?? ''); const [phone, setPhone] = useState(student?.phone ?? ''); const [career, setCareer] = useState(student?.career ?? ''); const [semester, setSemester] = useState(student?.semester ?? '');
   const [modalities, setModalities] = useState(student?.modalities ?? ['Prácticas']); const [technologies, setTechnologies] = useState(student?.technologies.join(', ') ?? '');
   const [status, setStatus] = useState(student?.status ?? 'active'); const [selected, setSelected] = useState<Student | null>(null);
   // Al registrar, el avatar ya viene elegido (el animal menos repetido); se puede cambiar antes de guardar.
@@ -160,7 +164,7 @@ function StudentForm({ student, onClose }: { student?: Student; onClose: () => v
     if (duplicate) { setSelected(duplicate); setError('Esa matrícula ya tiene expediente. Puedes incorporarlo a tu área.'); return; }
     if (!modalities.length) { setError('Elige al menos una modalidad.'); return; }
     if (startDate && endDate && endDate < startDate) { setError('La fecha de término debe ser posterior al inicio.'); return; }
-    const body = { name: name.trim(), registration: registration.trim(), email: email.trim(), career: career.trim(), semester: semester.trim(), modalities, technologies: [...new Set(technologies.split(',').map(s => s.trim()).filter(Boolean))], avatar, startDate: startDate || null, endDate: endDate || null, hoursRequired: hoursRequired ? Number(hoursRequired) : null, status };
+    const body = { name: name.trim(), registration: registration.trim(), email: email.trim(), phone: phone.trim(), career: career.trim(), semester: semester.trim(), modalities, technologies: [...new Set(technologies.split(',').map(s => s.trim()).filter(Boolean))], avatar, startDate: startDate || null, endDate: endDate || null, hoursRequired: hoursRequired ? Number(hoursRequired) : null, status };
     await save(() => student ? patch(`/students/${student.id}`, { ...body, version: student.version }) : post('/students', (({ status: _, ...fields }) => fields)(body)), student ? 'Expediente actualizado.' : `${firstName(body.name)} quedó registrado en tu área.`, student ? 'Guardado' : 'Registrado');
   }
   const submitLabel = selected ? selected.areaIds.includes(areaId) ? 'Abrir expediente' : 'Incorporar a mi área' : student ? 'Guardar cambios' : <><UserPlus size={16} />Registrar alumno</>;
@@ -189,6 +193,8 @@ function StudentForm({ student, onClose }: { student?: Student; onClose: () => v
           <div className="form-grid">
             <Field label="Matrícula" required><input required maxLength={40} value={registration} onChange={e => setRegistration(e.target.value)} placeholder="Ej. A018273" autoComplete="off" /></Field>
             <Field label="Correo electrónico"><input type="email" maxLength={254} value={email} onChange={e => setEmail(e.target.value)} /></Field>
+            <Field label="Teléfono, Telegram o WhatsApp"><input type="tel" maxLength={40} value={phone} onChange={e => setPhone(e.target.value)} placeholder="Ej. 221 161 4124" /></Field>
+            <span className="form-grid-gap" aria-hidden="true" />
             <Field label="Carrera"><input maxLength={160} value={career} onChange={e => setCareer(e.target.value)} /></Field>
             <Field label="Semestre"><input maxLength={40} value={semester} onChange={e => setSemester(e.target.value)} /></Field>
           </div>
@@ -576,6 +582,17 @@ function ResumeForm({ student, onClose }: { student: Student; onClose: () => voi
       <Footer busy={busy} done={done} onClose={onClose}>Retomar participación</Footer>
     </form>
   </Modal>;
+}
+
+/* ---------- Tesis (Investigación) ---------- */
+
+/** Los diálogos viven en Thesis.tsx; aquí reciben el guardado y el pie comunes a todos los formularios. */
+function ThesisDialog({ student, action, onClose }: { student: Student; action?: ThesisAction; onClose: () => void }) {
+  const kit = useSave(onClose);
+  const fresh = useApp().workspace.students.find(s => s.id === student.id) ?? student;
+  const save = <T,>(fn: () => Promise<T>, message: string, doneLabel?: string) => { kit.save(fn, message, doneLabel); };
+  return action ? <ThesisStepForm student={fresh} action={action} onClose={onClose} save={save} busy={kit.busy} error={kit.error} done={kit.done} Footer={Footer} />
+    : <ThesisForm student={fresh} onClose={onClose} save={save} busy={kit.busy} error={kit.error} done={kit.done} Footer={Footer} />;
 }
 
 /* ---------- Banco de actividades ---------- */

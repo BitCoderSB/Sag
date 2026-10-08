@@ -1,15 +1,18 @@
 import { useState, type CSSProperties, type ReactNode } from 'react';
-import { ArrowRight, Barricade, CalendarBlank, CheckCircle, Circle, CircleHalf, Exam, FileText, Hourglass, Kanban, LinkSimple, ListChecks, Pause, Plus, Rows, SealCheck, Sparkle, Stack, Sun, UserPlus, Users, ArrowsClockwise, ClockCountdown, Flag, Archive } from '@phosphor-icons/react';
+import { ArrowRight, Barricade, CalendarBlank, CheckCircle, Circle, CircleHalf, Exam, FileText, Hourglass, Kanban, LinkSimple, ListChecks, Pause, Plus, Rows, SealCheck, Sparkle, Stack, Sun, UserPlus, Users, ArrowsClockwise, ClockCountdown, Flag, Archive, GraduationCap, FolderOpen } from '@phosphor-icons/react';
 import type { ActivityDraft, Assignment, Student, Workspace } from '../../shared/types';
 import { useApp } from '../context';
+import { RESEARCH_DRIVE, ThesisCycle, daysInPhase, thesisNext } from '../components/Thesis';
+import { nextPhase, phaseInfo, STEP_LABEL, THESIS_PHASES, type ThesisStep } from '../../shared/thesis';
 import { actionsToday, assignmentProgress, dateKey, dayDiff, dueText, formatDate, HEALTH, isLate, isOpen, isWaiting, normalize, pauseOf, PAUSE_LABELS, plural, scoped, studentHealth, timeAgo, today, type Health } from '../lib';
 import { Avatar, Badge, Button, Empty, Menu, Search, StatusAvatar } from '../components/ui';
 import { beginDrag, DragLayer, useDragState, type DragItem } from '../components/CalendarDrag';
 import { buildItems, describeEvent, itemDetail, KIND, TODAY_KINDS, LATER_KINDS, useTaskAction, type Item } from './Dashboard';
 
-type View = 'activities' | 'day' | 'people' | 'bank';
+type View = 'activities' | 'thesis' | 'day' | 'people' | 'bank';
 const VIEWS: { id: View; label: string; icon: typeof Kanban; hint: string }[] = [
   { id: 'activities', label: 'Actividades', icon: Kanban, hint: 'Cada actividad en su etapa; arrastra para registrar el siguiente paso.' },
+  { id: 'thesis', label: 'Tesis', icon: GraduationCap, hint: 'Cada tesista en su fase. Arrastra a la siguiente fase al aprobarla en la llamada.' },
   { id: 'day', label: 'Mi día', icon: Sun, hint: 'Lo atrasado, lo de hoy y lo que ya registraste hoy.' },
   { id: 'people', label: 'Participación', icon: Users, hint: 'En qué momento de su participación está cada alumno.' },
   { id: 'bank', label: 'Banco', icon: Archive, hint: 'Actividades preparadas sin alumno; arrástralas a quien le toque.' },
@@ -21,7 +24,8 @@ export default function Board() {
   const app = useApp();
   const [view, setView] = useState<View>(() => (app.params.get('v') as View) ?? 'activities');
   const pick = (v: View) => { setView(v); history.replaceState(null, '', `#board${v === 'activities' ? '' : `?v=${v}`}`); };
-  const views = app.readonly ? VIEWS.filter(v => v.id !== 'day' && v.id !== 'bank') : VIEWS;
+  const hasThesis = app.workspace.students.some(s => s.thesis) || app.workspace.user.areaId === 'research';
+  const views = (app.readonly ? VIEWS.filter(v => v.id !== 'day' && v.id !== 'bank') : VIEWS).filter(v => v.id !== 'thesis' || hasThesis);
   const current = VIEWS.find(v => v.id === view)!;
   return <div className="board-page">
     <header className="board-head">
@@ -29,6 +33,7 @@ export default function Board() {
       <div className="board-views" role="tablist" aria-label="Vista del tablero">{views.map(v => <button key={v.id} type="button" role="tab" aria-selected={view === v.id} className={view === v.id ? 'is-on' : ''} onClick={() => pick(v.id)}><v.icon size={16} weight={view === v.id ? 'fill' : 'regular'} aria-hidden="true" />{v.label}</button>)}</div>
     </header>
     {view === 'activities' && <ActivitiesBoard />}
+    {view === 'thesis' && hasThesis && <ThesisBoard />}
     {view === 'day' && !app.readonly && <DayBoard />}
     {view === 'people' && <PeopleBoard />}
     {view === 'bank' && !app.readonly && <BankBoard />}
@@ -299,4 +304,53 @@ function BankBoard() {
       </div>)}</div>
     </section>
   </div>;
+}
+
+/* ---------- Tesis (Investigación) ---------- */
+
+function ThesisBoard() {
+  const app = useApp(); const ro = app.readonly || app.workspace.user.areaId !== 'research';
+  const drag = useDragState(); const [query, setQuery] = useState('');
+  const q = normalize(query.trim());
+  const people = app.workspace.students.filter(s => s.thesis && s.status === 'active' && (!q || normalize(`${s.name} ${s.thesis.topic}`).includes(q)));
+  const count = (step: ThesisStep) => people.filter(s => s.thesis!.step === step).length;
+  const dragFor = (s: Student): DragItem | undefined => ro ? undefined : {
+    id: s.id, title: s.name, person: phaseInfo(s.thesis!.phase).label, avatar: s.avatar, tip: 'Soltar para registrar la llamada',
+    accepts: to => { const t = s.thesis!; const info = phaseInfo(t.phase);
+      if (to === t.phase) return 'Ya está en esta fase';
+      if (t.step !== 'call') return `Primero: ${thesisNext(t.step).label.toLowerCase()}`;
+      if (to === nextPhase(t.phase)) return true;
+      if (to === info.backTo) return true;
+      return 'Solo a la fase siguiente (o usa «Cambiar de fase» en su tesis)'; },
+    drop: to => app.modal({ type: 'thesisStep', student: s, action: to === phaseInfo(s.thesis!.phase).backTo ? 'back' : 'advance' }),
+  };
+  return <>
+    <div className="board-tools">
+      <Search value={query} onChange={setQuery} placeholder="Buscar tesista o tema" label="Buscar tesista" />
+      <a className="board-toggle" href={RESEARCH_DRIVE} target="_blank" rel="noopener noreferrer"><FolderOpen size={15} aria-hidden="true" />Carpeta de tesis en Drive</a>
+      <div className="board-summary"><span><strong>{count('review')}</strong> por revisar</span><span><strong>{count('call')}</strong> llamadas pendientes</span><span><strong>{count('kickoff')}</strong> llamadas iniciales</span><span><strong>{count('working')}</strong> trabajando</span></div>
+    </div>
+    <div className="kb kb-thesis" style={{ '--cols': THESIS_PHASES.length } as CSSProperties}>
+      <div className="kb-heads">{THESIS_PHASES.map(p => <div key={p.id} className="kb-col-head tone-info" title={`${p.label} · puntos ${p.points} del flujo`}><span className="th-col-n">{p.n}</span><strong>{p.short}</strong><span className="kb-count">{people.filter(s => s.thesis!.phase === p.id).length}</span></div>)}</div>
+      <div className="kb-lane kb-flat">{THESIS_PHASES.map(p => <div key={p.id} data-drop={p.id} className={`kb-cell ${drag?.over === p.id ? (drag.blocked ? 'is-blocked' : 'is-over') : ''}`}>
+        {people.filter(s => s.thesis!.phase === p.id).sort((a, b) => STEP_ORDER.indexOf(a.thesis!.step) - STEP_ORDER.indexOf(b.thesis!.step)).map(s => <ThesisCard key={s.id} s={s} drag={dragFor(s)} ro={ro} />)}
+        {!people.some(s => s.thesis!.phase === p.id) && <p className="kb-empty">—</p>}
+      </div>)}</div>
+    </div>
+    {!ro && <p className="board-foot">Primero lo que te toca (revisar, llamadas). Arrastra un tesista a la fase siguiente cuando la aprueben en la llamada; desde Desarrollo matemático también puede regresar a Diseño. Para otros cambios usa «Cambiar de fase» en su tesis.</p>}
+  </>;
+}
+const STEP_ORDER: ThesisStep[] = ['call', 'review', 'kickoff', 'working', 'done'];
+function ThesisCard({ s, drag, ro }: { s: Student; drag?: DragItem; ro: boolean }) {
+  const app = useApp(); const t = s.thesis!; const next = thesisNext(t.step); const days = daysInPhase(s);
+  return <article className={`kb-card th-card is-${t.step} ${drag ? 'is-draggable' : ''}`} onPointerDown={drag ? e => { if (!(e.target as HTMLElement).closest('.button, .icon-button, [aria-haspopup]')) beginDrag(drag, e); } : undefined}>
+    <button type="button" className="kb-card-main kb-person-main" onClick={() => app.openStudent(s.id)}>
+      <Avatar name={s.name} avatar={s.avatar} />
+      <span><strong>{s.name}</strong><small>{t.topic || 'Sin tema'}</small></span>
+    </button>
+    <span className={`th-step is-${t.step}`}>{STEP_LABEL[t.step]}</span>
+    {t.phase !== 'defense' && t.step !== 'kickoff' && t.step !== 'done' && <ThesisCycle step={t.step} compact />}
+    <footer className="kb-card-foot"><span className={`kb-due ${days > 30 && next.who === 'student' ? 'is-warn' : ''}`}><ClockCountdown size={13} aria-hidden="true" />{plural(days, 'día', 'días')} en la fase</span></footer>
+    {!ro && next.who === 'you' && <Button size="sm" className="kb-card-action th-card-action" onClick={() => app.modal({ type: 'thesisStep', student: s, action: t.step === 'call' ? 'advance' : next.action! })}>{next.label}</Button>}
+  </article>;
 }
