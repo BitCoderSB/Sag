@@ -90,7 +90,9 @@ for _ in $(seq 1 20); do curl -fsS -o /dev/null http://127.0.0.1:3001/api/sessio
 curl -fsS -o /dev/null http://127.0.0.1:3001/api/session || { journalctl -u sag -n 30 --no-pager; falla "SAG no arrancó. Arriba está su registro."; }
 echo "SAG responde en el servidor."
 
+CADDY_CAMBIO=no
 if [ "$CAMBIAR_DOMINIO" = si ] || ! grep -q "reverse_proxy 127.0.0.1:3001" /etc/caddy/Caddyfile 2>/dev/null; then
+  CADDY_CAMBIO=si
   if [ -f /etc/caddy/Caddyfile ] && [ ! -f /etc/caddy/Caddyfile.antes-de-sag ]; then cp /etc/caddy/Caddyfile /etc/caddy/Caddyfile.antes-de-sag; fi
   cat > /etc/caddy/Caddyfile <<EOF
 $DOMINIO {
@@ -122,6 +124,7 @@ EOF
   for _ in $(seq 1 20); do curl -fsS -o /dev/null http://127.0.0.1:3002/api/session && break; sleep 1; done
   curl -fsS -o /dev/null http://127.0.0.1:3002/api/session || { journalctl -u sag-demo -n 30 --no-pager; falla "El sitio de prueba no arrancó. Arriba está su registro."; }
   if ! grep -q "reverse_proxy 127.0.0.1:3002" /etc/caddy/Caddyfile; then
+    CADDY_CAMBIO=si
     cat >> /etc/caddy/Caddyfile <<EOF
 
 $DOMINIO:8443 {
@@ -132,7 +135,9 @@ EOF
   fi
   if command -v ufw >/dev/null && ufw status | grep -qiE "status: active|estado: activo"; then ufw allow 8443/tcp >/dev/null; fi
 fi
-systemctl reload caddy 2>/dev/null || systemctl restart caddy
+# Caddy solo se toca si cambió su configuración. Recargarlo en cada publicación dejaba colgadas las conexiones
+# abiertas de los navegadores (la página se quedaba en «La solicitud tardó demasiado»); reiniciar las cierra limpio.
+if [ "$CADDY_CAMBIO" = si ]; then systemctl restart caddy; elif ! systemctl is-active --quiet caddy; then systemctl start caddy; fi
 if command -v ufw >/dev/null && ufw status | grep -qiE "status: active|estado: activo"; then ufw allow 80,443/tcp >/dev/null; fi
 
 echo "Esperando el certificado HTTPS (hasta 90 s)..."
