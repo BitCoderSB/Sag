@@ -26,7 +26,7 @@ const identifier = z.string().min(1).max(100).regex(/^[a-zA-Z0-9_-]+$/);
 const httpUrl = z.string().trim().max(2048).refine(value => { if (!value) return true; try { const url = new URL(value); return ['https:','http:'].includes(url.protocol) && !url.username && !url.password; } catch { return false; } }, 'Usa un enlace http o https válido.');
 const tags = z.array(text(80).min(1)).max(30).transform(a=>[...new Set(a)]);
 const registration = text(40).min(2).regex(/^[\p{L}\p{N}._-]+$/u, 'El identificador no puede contener espacios.').transform(v=>v.toUpperCase());
-const studentShape = { name: text(160).min(2), registration, email: z.union([z.email().max(254),z.literal('')]).default(''), career: text(160).default(''), semester: text(50).default(''), modalities: tags.default([]), technologies: tags.default([]), avatar: z.enum(ANIMALS).optional(), startDate: day.nullable().optional(), endDate: day.nullable().optional(), hoursRequired: z.number().int().min(1).max(5000).nullable().optional(), phone: text(40).optional() };
+const studentShape = { name: text(160).min(2), registration, email: z.union([z.email().max(254),z.literal('')]).default(''), career: text(160).default(''), semester: text(50).default(''), modalities: tags.default([]), technologies: tags.default([]), avatar: z.enum(ANIMALS).optional(), startDate: day.nullable().optional(), endDate: day.nullable().optional(), hoursRequired: z.number().int().min(1).max(5000).nullable().optional(), subjects: z.number().int().min(1).max(20).nullable().optional(), phone: text(40).optional() };
 const studentCreate = z.object(studentShape).strict();
 const studentPatch = z.object({ ...studentShape, version: z.number().int().positive(), status: z.enum(['active','paused','completed']) }).strict();
 const assignmentCreate = z.object({ studentId: identifier, title: text(200).min(3), description: text(10000).default(''), project: text(200).default(''), dueAt: date.nullable().default(null), reviewAt: date, skillIds: z.array(identifier).min(1).max(30).transform(a=>[...new Set(a)]), startAt: date.nullable().default(null), phase: text(80).default(''), priority: z.enum(['normal','high']).default('normal'), links: z.array(z.object({ label: text(120).min(1), url: httpUrl.refine(Boolean,'El enlace es obligatorio.') }).strict()).max(20).default([]) }).strict();
@@ -138,7 +138,7 @@ export function createApp(options: AppOptions) {
     const allAssignments = store.all<Assignment>('assignments');
     const students = store.all<Student>('students').map(s=>{
       const own = user.role==='director'||s.areaIds.includes(user.areaId!);
-      const safe = own ? s : {...s,email:'',phone:'',career:'',semester:'',modalities:[]};
+      const safe = own ? s : {...s,email:'',phone:'',career:'',semester:'',modalities:[],subjects:null};
       // La tesis es del área de Investigación: otras áreas no ven su avance, enlaces ni historial.
       if (s.thesis && !(user.role==='director'||(user.areaId==='research'&&s.areaIds.includes('research')))) delete (safe as Student).thesis;
       const pauses = user.role==='director' ? s.pauses : s.pauses?.[user.areaId!] ? {[user.areaId!]:s.pauses[user.areaId!]} : undefined;

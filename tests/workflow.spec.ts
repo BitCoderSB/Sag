@@ -16,7 +16,6 @@ test('end-to-end: unique student, assignment, delivery, evaluation, persistence 
   await page.getByLabel('Correo electrónico', { exact: true }).fill('lucia.prueba@example.test');
   await page.getByLabel('Carrera', { exact: true }).fill('Ingeniería en Computación');
   await page.getByLabel('Semestre', { exact: true }).fill('6');
-  await page.getByLabel('Tecnologías', { exact: true }).fill('TypeScript, React');
   await page.getByRole('button', { name: 'Registrar alumno', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await page.getByLabel('Buscar alumnos', { exact: true }).fill(`E2E-${runId}`);

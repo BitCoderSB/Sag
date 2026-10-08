@@ -3362,3 +3362,18 @@ body.is-dragging .bank-person:not(.is-over-drop) { box-shadow: inset 0 0 0 1px r
 .board-views::-webkit-scrollbar { display: none; }
 .board-views button { white-space: nowrap; flex-shrink: 0; }
 .kb-person small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Encabezados de columna del tablero: color sólido con texto blanco (sin barras de acento). */
+.kb-col-head { --head: #4b5563; background: var(--head) !important; box-shadow: none !important; color: #fff !important; }
+.kb-col-head.tone-info { --head: #1d4ed8; }
+.kb-col-head.tone-ok { --head: #15803d; }
+.kb-col-head.tone-warn { --head: #b45309; }
+.kb-col-head.tone-danger { --head: #b91c1c; }
+.kb-col-head.tone-wait { --head: #475569; }
+.kb-col-head.tone-idle { --head: #854d0e; }
+.kb-col-head.tone-neutral { --head: #374151; }
+.kb-col-head strong, .kb-col-head svg { color: #fff !important; }
+.kb-col-head .kb-count { color: #fff; background: rgb(0 0 0 / .25); }
+
+/* Tema claro: el día de hoy es azul sólido; todo su texto en blanco. */
+:root[data-theme="light"] .cal-day.is-today .cal-number, :root[data-theme="light"] .cal-col.is-today .cal-wd, :root[data-theme="light"] .cal-col.is-today .wk-empty, :root[data-theme="light"] .cal-day.is-today .cal-more { color: #fff; }

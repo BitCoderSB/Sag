@@ -143,15 +143,19 @@ export default function Forms({ state, onClose }: { state: NonNullable<ModalStat
 
 /* ---------- Alumno ---------- */
 
-const MODALITIES = ['Prácticas', 'Servicio social', 'Tesis', 'Investigación'];
+const MODALITIES = ['Prácticas', 'Servicio social', 'Materias', 'Tesis', 'Investigación'];
+/** Solo estas modalidades cuentan horas. */
+const HOUR_MODALITIES = ['Prácticas', 'Servicio social'];
 function StudentForm({ student, onClose }: { student?: Student; onClose: () => void }) {
   const { workspace, openStudent } = useApp(); const areaId = workspace.user.areaId!;
   const [name, setName] = useState(student?.name ?? ''); const [registration, setRegistration] = useState(student?.registration ?? '');
   const [email, setEmail] = useState(student?.email ?? ''); const [phone, setPhone] = useState(student?.phone ?? ''); const [career, setCareer] = useState(student?.career ?? ''); const [semester, setSemester] = useState(student?.semester ?? '');
-  const [modalities, setModalities] = useState(student?.modalities ?? ['Prácticas']); const [technologies, setTechnologies] = useState(student?.technologies.join(', ') ?? '');
+  const [modalities, setModalities] = useState(student?.modalities ?? [areaId === 'research' ? 'Tesis' : 'Prácticas']); const [technologies, setTechnologies] = useState(student?.technologies.join(', ') ?? '');
   const [status, setStatus] = useState(student?.status ?? 'active'); const [selected, setSelected] = useState<Student | null>(null);
   // Al registrar, el avatar ya viene elegido (el animal menos repetido); se puede cambiar antes de guardar.
   const [startDate, setStartDate] = useState(student ? student.startDate ?? '' : dateKey()); const [endDate, setEndDate] = useState(student?.endDate ?? ''); const [hoursRequired, setHoursRequired] = useState(student?.hoursRequired ? String(student.hoursRequired) : '');
+  const [subjects, setSubjects] = useState(student?.subjects ? String(student.subjects) : '');
+  const countsHours = modalities.some(m => HOUR_MODALITIES.includes(m)); const takesSubjects = modalities.includes('Materias');
   const [avatar, setAvatar] = useState<AnimalId>(() => student?.avatar ?? pickAnimal(workspace.students.map(s => s.avatar)));
   const [pickAvatar, setPickAvatar] = useState(false);
   const { busy, error, setError, save, done } = useSave(onClose);
@@ -164,7 +168,7 @@ function StudentForm({ student, onClose }: { student?: Student; onClose: () => v
     if (duplicate) { setSelected(duplicate); setError('Esa matrícula ya tiene expediente. Puedes incorporarlo a tu área.'); return; }
     if (!modalities.length) { setError('Elige al menos una modalidad.'); return; }
     if (startDate && endDate && endDate < startDate) { setError('La fecha de término debe ser posterior al inicio.'); return; }
-    const body = { name: name.trim(), registration: registration.trim(), email: email.trim(), phone: phone.trim(), career: career.trim(), semester: semester.trim(), modalities, technologies: [...new Set(technologies.split(',').map(s => s.trim()).filter(Boolean))], avatar, startDate: startDate || null, endDate: endDate || null, hoursRequired: hoursRequired ? Number(hoursRequired) : null, status };
+    const body = { name: name.trim(), registration: registration.trim(), email: email.trim(), phone: phone.trim(), career: career.trim(), semester: semester.trim(), modalities, technologies: [...new Set(technologies.split(',').map(s => s.trim()).filter(Boolean))], avatar, startDate: startDate || null, endDate: endDate || null, hoursRequired: countsHours && hoursRequired ? Number(hoursRequired) : null, subjects: takesSubjects && subjects ? Number(subjects) : null, status };
     await save(() => student ? patch(`/students/${student.id}`, { ...body, version: student.version }) : post('/students', (({ status: _, ...fields }) => fields)(body)), student ? 'Expediente actualizado.' : `${firstName(body.name)} quedó registrado en tu área.`, student ? 'Guardado' : 'Registrado');
   }
   const submitLabel = selected ? selected.areaIds.includes(areaId) ? 'Abrir expediente' : 'Incorporar a mi área' : student ? 'Guardar cambios' : <><UserPlus size={16} />Registrar alumno</>;
@@ -207,13 +211,17 @@ function StudentForm({ student, onClose }: { student?: Student; onClose: () => v
           <fieldset className="choices"><legend>Modalidad <span className="required" aria-hidden="true">*</span></legend>
             <div className="chips">{MODALITIES.map(m => <label className="chip-check" key={m}><input type="checkbox" checked={modalities.includes(m)} onChange={() => setModalities(old => old.includes(m) ? old.filter(v => v !== m) : [...old, m])} /><Check size={12} weight="bold" aria-hidden="true" />{m}</label>)}</div>
           </fieldset>
-          <div className="form-grid form-grid-3">
+          <div className={`form-grid ${countsHours || takesSubjects ? 'form-grid-3' : ''}`}>
             <Field label="Inicio"><input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} /></Field>
             <Field label="Término esperado" hint="Para ver si su plan cabe en su periodo."><input type="date" min={startDate || undefined} value={endDate} onChange={e => setEndDate(e.target.value)} /></Field>
-            <Field label="Horas requeridas" hint="Servicio social o prácticas. Opcional."><input type="number" inputMode="numeric" min={1} max={5000} step={1} value={hoursRequired} onChange={e => setHoursRequired(e.target.value)} placeholder="Ej. 480" /></Field>
+            {countsHours && <Field label="Horas requeridas" hint="Opcional. Para ver su avance de horas."><input type="number" inputMode="numeric" min={1} max={5000} step={1} value={hoursRequired} onChange={e => setHoursRequired(e.target.value)} placeholder="Ej. 480" /></Field>}
+            {takesSubjects && !countsHours && <Field label="Número de materias" hint="Opcional."><input type="number" inputMode="numeric" min={1} max={20} step={1} value={subjects} onChange={e => setSubjects(e.target.value)} placeholder="Ej. 2" /></Field>}
           </div>
-          <Field label="Tecnologías" hint="Separadas por comas. Son experiencia declarada, no calificaciones."><input maxLength={500} value={technologies} onChange={e => setTechnologies(e.target.value)} placeholder="Ej. Python, React, Figma" /></Field>
+          {takesSubjects && countsHours && <div className="form-grid form-grid-3"><Field label="Número de materias" hint="Opcional."><input type="number" inputMode="numeric" min={1} max={20} step={1} value={subjects} onChange={e => setSubjects(e.target.value)} placeholder="Ej. 2" /></Field></div>}
           </FormSection>
+          {student && <FormSection title="Perfil técnico">
+          <Field label="Tecnologías" hint="Separadas por comas. Son experiencia declarada, no calificaciones."><input maxLength={500} value={technologies} onChange={e => setTechnologies(e.target.value)} placeholder="Ej. Python, React, Figma" /></Field>
+          </FormSection>}
           {student && <Field label="Estado" hint={student.areaIds.length > 1 ? 'Está en varias áreas: el estado es compartido y no puede cambiarse desde una sola.' : undefined}>
             <Segmented label="Estado del alumno" className="segmented-block" value={status} onChange={v => setStatus(v as Student['status'])} options={[{ value: 'active', label: 'Activo', disabled: student.areaIds.length > 1 }, { value: 'paused', label: 'En pausa', disabled: student.areaIds.length > 1 }, { value: 'completed', label: 'Terminó', disabled: student.areaIds.length > 1 }]} />
           </Field>}

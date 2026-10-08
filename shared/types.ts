@@ -27,6 +27,8 @@ export interface Student {
   startDate?: string | null; endDate?: string | null;
   /** Horas que exige su modalidad (servicio social, prácticas). Opcional. */
   hoursRequired?: number | null;
+  /** Materias que cursa con el laboratorio (modalidad «Materias»). Opcional. */
+  subjects?: number | null;
 }
 export interface Skill { id: string; name: string; areaId: AreaId | null; description: string }
 export type AssignmentStatus = 'in_progress' | 'pending_review' | 'changes_requested' | 'completed' | 'cancelled';
