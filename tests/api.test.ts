@@ -514,6 +514,13 @@ test('activity bank: drafts belong to an area and can be edited and removed',asy
   assert.ok(!((await jsonOk(await sw.request('/api/workspace')) as Workspace).drafts??[]).some(d=>d.id===draft.id));
 });
 
+test('student fields can stay empty: no registration or modality, and blanks do not collide',async()=>{
+  const c=await session('software');
+  const a=(await jsonOk(await c.request('/api/students','POST',{name:'Alumno Sin Datos'}),201)).student as Student;
+  const b=(await jsonOk(await c.request('/api/students','POST',{name:'Otro Sin Datos',registration:''}),201)).student as Student;
+  assert.equal(a.registration,''); assert.equal(b.registration,''); assert.deepEqual(a.modalities,[]);
+  assert.equal((await c.request('/api/students','POST',{name:'Con espacios',registration:'A 1'})).status,400);
+});
 test('thesis workflow: research only, follows the cycle, advances, stays, goes back from math to design',async()=>{
   const re=await session('research'); const sw=await session('software');
   const st=(await jsonOk(await re.request('/api/students','POST',{name:'Tesista Prueba',registration:'TES-TEST-1',modalities:['Tesis'],phone:'221 000 0000'}),201)).student as Student;

@@ -1,7 +1,7 @@
 import { useRef, useState, type ReactNode } from 'react';
 import { ArrowCounterClockwise, ArrowRight, Barricade, Hourglass, Check, TrendUp, CalendarPlus, ClipboardText, DownloadSimple, Exam, File, LinkSimple, PencilSimple, UploadSimple, X, XCircle, WarningCircle, CheckCircle, Clock, Prohibit } from '@phosphor-icons/react';
 import { useApp } from '../context';
-import { blockedSince, blockEscalated, isWaiting, assignmentProgress, scoreLevel, api, cleanDetail, dateKey, dayLabel, dueText, fileSize, formatDate, formatTime, isLate, isOpen, relativeDay, safeUrl, patch, linkLabel, MAX_FILE, FILE_TYPES, toHttpUrl } from '../lib';
+import { blockedSince, blockEscalated, isWaiting, assignmentProgress, scoreLevel, api, cleanDetail, dateKey, dayLabel, dueText, fileSize, formatDate, formatTime, isLate, isOpen, relativeDay, safeUrl, patch, linkLabel, MAX_FILE, FILE_TYPES, toHttpUrl, plural } from '../lib';
 import { AreaTag, Avatar, Badge, Button, Drawer, Empty, ErrorMessage, ExternalLink, IconButton, Menu, Meter, Tabs } from './ui';
 import type { Tone } from '../lib';
 import ReviewCard from './ReviewCard';
@@ -13,7 +13,7 @@ export default function AssignmentDrawer({ id, onClose }: { id: string; onClose:
   const assignment = w.assignments.find(a => a.id === id);
   const [tab, setTab] = useState<Tab>('detail');
   const [fileKind, setFileKind] = useState<'instruction' | 'evidence'>('instruction'); const [newLink, setNewLink] = useState(''); const [busy, setBusy] = useState(false); const [error, setError] = useState('');
-  const [linkOpen, setLinkOpen] = useState(false); const lock = useRef(false); const fileInput = useRef<HTMLInputElement>(null);
+  const [linkOpen, setLinkOpen] = useState(false); const [briefOpen, setBriefOpen] = useState(false); const lock = useRef(false); const fileInput = useRef<HTMLInputElement>(null);
   if (!assignment) return <Drawer label="Actividad no disponible" onClose={onClose}><div className="drawer-body"><Empty title="No encontramos la actividad" description="Puede que ya no tengas acceso. Cierra el panel e inténtalo de nuevo." /></div></Drawer>;
   const student = w.students.find(s => s.id === assignment.studentId);
   const editable = !readonly && assignment.areaId === w.user.areaId; const active = isOpen(assignment);
@@ -109,6 +109,17 @@ export default function AssignmentDrawer({ id, onClose }: { id: string; onClose:
       <p className="ad-eyebrow"><ClipboardText size={14} aria-hidden="true" />Actividad{assignment.phase ? ` · ${assignment.phase}` : ''}{readonly && <AreaTag id={assignment.areaId} compact />}</p>
       <h2>{assignment.title}</h2>
       <button type="button" className="ad-person" onClick={() => openStudent(assignment.studentId)}><Avatar name={student?.name ?? 'Alumno'} avatar={student?.avatar} size="sm" /><span>{student?.name ?? 'Alumno'}</span><small>Ver expediente</small><ArrowRight size={13} aria-hidden="true" /></button>
+      {/* Qué se le asignó, a la vista desde que se abre: instrucciones, habilidades y material. */}
+      <div className="ad-brief">
+        <span className="ad-brief-label">Qué debe hacer y entregar</span>
+        {assignment.description ? <p className={`ad-brief-text ${briefOpen ? 'is-open' : ''}`}>{assignment.description}</p> : <p className="ad-brief-text muted">Sin instrucciones escritas.{editable && active && <> <button type="button" className="ad-inline-link" onClick={edit}>Escribirlas</button></>}</p>}
+        {assignment.description.length > 220 && <button type="button" className="ad-inline-link" aria-expanded={briefOpen} onClick={() => setBriefOpen(o => !o)}>{briefOpen ? 'Ver menos' : 'Ver todo'}</button>}
+        {(assignment.skillIds.length > 0 || assignment.links.length + attachments.length > 0) && <span className="ad-brief-meta">
+          {assignment.skillIds.slice(0, 4).map(skillId => <span className="chip" key={skillId}>{w.skills.find(s => s.id === skillId)?.name ?? skillId}</span>)}
+          {assignment.skillIds.length > 4 && <span className="chip">+{assignment.skillIds.length - 4}</span>}
+          {assignment.links.length + attachments.length > 0 && <span className="ad-brief-files"><LinkSimple size={13} aria-hidden="true" />{plural(assignment.links.length + attachments.length, 'material', 'materiales')}</span>}
+        </span>}
+      </div>
       {menuItems.length > 0 && <div className="ad-menu"><Menu label="Más acciones de la actividad" items={menuItems} /></div>}
     </header>
 
@@ -138,10 +149,6 @@ export default function AssignmentDrawer({ id, onClose }: { id: string; onClose:
           <div><dt>Avance</dt><dd>{progress !== null ? <><strong>{progress} %</strong><span className={`ad-meter ${progress >= 100 ? 'is-full' : ''}`}><i style={{ width: `${progress}%` }} /></span></> : <strong className="muted">Sin registrar</strong>}</dd></div>
           <div><dt>Asignada</dt><dd><strong>{formatDate(assignment.createdAt, { year: 'numeric' })}</strong>{assignment.startAt && dateKey(assignment.startAt) !== dateKey(assignment.createdAt) && <small>Inicio {formatDate(assignment.startAt)}</small>}</dd></div>
         </dl>
-        <section className="ad-section">
-          <h3 className="ad-section-head">Qué debe hacer y entregar</h3>
-          <p className="prose">{assignment.description || <span className="muted">Sin instrucciones escritas.</span>}</p>
-        </section>
         <section className="ad-section">
           <h3 className="ad-section-head">Habilidades a evaluar<span className="count">{assignment.skillIds.length}</span></h3>
           <span className="tag-row">{assignment.skillIds.map(skillId => <span className="chip" key={skillId}>{w.skills.find(s => s.id === skillId)?.name ?? skillId}</span>)}</span>

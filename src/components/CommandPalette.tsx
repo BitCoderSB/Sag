@@ -27,7 +27,7 @@ export default function CommandPalette({ onClose }: { onClose: () => void }) {
     const students = w.students
       .filter(s => normalize(`${s.name} ${s.registration} ${s.technologies.join(' ')}`).includes(q))
       .sort((a, b) => Number(own(b.areaIds)) - Number(own(a.areaIds)) || a.name.localeCompare(b.name));
-    list.push(...students.slice(0, q ? 6 : 4).map(s => ({ id: s.id, group: 'Alumnos', label: s.name, detail: `${s.registration} · ${s.areaIds.map(areaName).join(', ')}`, icon: <Avatar name={s.name} avatar={s.avatar} size="sm" />, run: run(() => app.openStudent(s.id)) })));
+    list.push(...students.slice(0, q ? 6 : 4).map(s => ({ id: s.id, group: 'Alumnos', label: s.name, detail: [s.registration, s.areaIds.map(areaName).join(', ')].filter(Boolean).join(' · '), icon: <Avatar name={s.name} avatar={s.avatar} size="sm" />, run: run(() => app.openStudent(s.id)) })));
     const assignments = w.assignments
       .filter(a => a.status !== 'cancelled' && normalize(`${a.title} ${w.students.find(s => s.id === a.studentId)?.name ?? ''}`).includes(q))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));

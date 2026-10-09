@@ -51,7 +51,7 @@ export default function Students() {
           <tbody>{visible.map(({ s, health, current, next, follow }) => <tr key={s.id} className={`row-link ${app.fresh.has(s.id) ? 'is-fresh' : ''}`} onClick={() => app.openStudent(s.id)}>
             <td><button type="button" className="student-name" onClick={e => { e.stopPropagation(); app.openStudent(s.id); }}>
               <StatusAvatar name={s.name} avatar={s.avatar} health={health} />
-              <span><strong>{s.name}</strong><small>{[s.registration, ...s.modalities].join(' · ')}</small></span>
+              <span><strong>{s.name}</strong><small>{[s.registration, ...s.modalities].filter(Boolean).join(' · ') || 'Sin matrícula ni modalidad'}</small></span>
             </button></td>
             <td className="col-md c-show">{current ? <span className="cell-progress"><Steps {...activitySteps(current, w)} /><span className="cell-stack"><span className="cell-title">{current.title}</span><small>{dueText(current)}</small></span></span> : s.thesis ? <span className="cell-stack"><span className="cell-title">Tesis · {phaseInfo(s.thesis.phase).label}</span><small>{STEP_LABEL[s.thesis.step]}</small></span> : <span className="muted">Ninguna</span>}</td>
             <td className="c-end c-top"><Badge tone={HEALTH[health].tone} dot={HEALTH[health].dot}>{HEALTH[health].label}</Badge></td>

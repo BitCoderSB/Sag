@@ -51,7 +51,7 @@ export default function GanttView() {
     return <div className="gv">
       <header className="gv-head">
         {closeButton}
-        <div className="gv-title"><Avatar name={student.name} avatar={student.avatar} size="lg" /><div><h1>{student.name}</h1><p>{t ? t.topic || 'Tesis sin tema' : `${student.registration}${student.career ? ` · ${student.career}` : ''}`}</p></div></div>
+        <div className="gv-title"><Avatar name={student.name} avatar={student.avatar} size="lg" /><div><h1>{student.name}</h1><p>{t ? t.topic || 'Tesis sin tema' : [student.registration, student.career].filter(Boolean).join(' · ')}</p></div></div>
         {tools}
       </header>
       <div className="gv-stats">

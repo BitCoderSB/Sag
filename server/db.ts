@@ -24,7 +24,9 @@ export class Store {
     for (const table of ['students','assignments','reviews','deliveries','evaluations','skills','notes','attachments','audit','meetings','drafts','thesisDocs']) {
       this.db.exec(`CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, data TEXT NOT NULL CHECK(json_valid(data)));`);
     }
-    this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS student_registration ON students(upper(json_extract(data, '$.registration')));
+    // Matrícula única solo cuando existe: varios alumnos pueden no tenerla todavía.
+    this.db.exec(`DROP INDEX IF EXISTS student_registration;
+      CREATE UNIQUE INDEX IF NOT EXISTS student_registration_set ON students(upper(json_extract(data, '$.registration'))) WHERE json_extract(data, '$.registration') <> '';
       CREATE UNIQUE INDEX IF NOT EXISTS evaluation_current ON evaluations(json_extract(data, '$.assignmentId')) WHERE json_extract(data, '$.current')=1;`);
   }
   all<T>(table: Entity): T[] { return this.db.prepare(`SELECT data FROM ${table} ORDER BY rowid`).all().map(row => JSON.parse(row.data as string)); }

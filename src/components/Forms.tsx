@@ -161,12 +161,11 @@ function StudentForm({ student, onClose }: { student?: Student; onClose: () => v
   const { busy, error, setError, save, done } = useSave(onClose);
   const query = normalize(name.trim());
   const matches = !student && !done && query.length >= 2 ? workspace.students.filter(s => normalize(`${s.name} ${s.registration}`).includes(query) || (!!registration.trim() && normalize(s.registration) === normalize(registration.trim()))).slice(0, 4) : [];
-  const duplicate = !student && workspace.students.find(s => s.registration.toLowerCase() === registration.trim().toLowerCase());
+  const duplicate = !student && !!registration.trim() && workspace.students.find(s => s.registration.toLowerCase() === registration.trim().toLowerCase());
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (selected) { if (selected.areaIds.includes(areaId)) { onClose(); openStudent(selected.id); return; } await save(() => post(`/students/${selected.id}/join`, {}), `${firstName(selected.name)} ahora también está en tu área.`); return; }
     if (duplicate) { setSelected(duplicate); setError('Esa matrícula ya tiene expediente. Puedes incorporarlo a tu área.'); return; }
-    if (!modalities.length) { setError('Elige al menos una modalidad.'); return; }
     if (startDate && endDate && endDate < startDate) { setError('La fecha de término debe ser posterior al inicio.'); return; }
     const body = { name: name.trim(), registration: registration.trim(), email: email.trim(), phone: phone.trim(), career: career.trim(), semester: semester.trim(), modalities, technologies: [...new Set(technologies.split(',').map(s => s.trim()).filter(Boolean))], avatar, startDate: startDate || null, endDate: endDate || null, hoursRequired: countsHours && hoursRequired ? Number(hoursRequired) : null, subjects: takesSubjects && subjects ? Number(subjects) : null, status };
     await save(() => student ? patch(`/students/${student.id}`, { ...body, version: student.version }) : post('/students', (({ status: _, ...fields }) => fields)(body)), student ? 'Expediente actualizado.' : `${firstName(body.name)} quedó registrado en tu área.`, student ? 'Guardado' : 'Registrado');
@@ -195,7 +194,7 @@ function StudentForm({ student, onClose }: { student?: Student; onClose: () => v
             </button>)}
           </div>}
           <div className="form-grid">
-            <Field label="Matrícula" required><input required maxLength={40} value={registration} onChange={e => setRegistration(e.target.value)} placeholder="Ej. A018273" autoComplete="off" /></Field>
+            <Field label="Matrícula" hint="Opcional. Puedes agregarla después."><input maxLength={40} value={registration} onChange={e => setRegistration(e.target.value)} placeholder="Ej. A018273" autoComplete="off" /></Field>
             <Field label="Correo electrónico"><input type="email" maxLength={254} value={email} onChange={e => setEmail(e.target.value)} /></Field>
             <Field label="Teléfono, Telegram o WhatsApp"><input type="tel" maxLength={40} value={phone} onChange={e => setPhone(e.target.value)} placeholder="Ej. 221 161 4124" /></Field>
             <span className="form-grid-gap" aria-hidden="true" />
@@ -208,7 +207,7 @@ function StudentForm({ student, onClose }: { student?: Student; onClose: () => v
           </fieldset>
           </FormSection>
           <FormSection title="Participación">
-          <fieldset className="choices"><legend>Modalidad <span className="required" aria-hidden="true">*</span></legend>
+          <fieldset className="choices"><legend>Modalidad <span className="muted">· opcional</span></legend>
             <div className="chips">{MODALITIES.map(m => <label className="chip-check" key={m}><input type="checkbox" checked={modalities.includes(m)} onChange={() => setModalities(old => old.includes(m) ? old.filter(v => v !== m) : [...old, m])} /><Check size={12} weight="bold" aria-hidden="true" />{m}</label>)}</div>
           </fieldset>
           <div className={`form-grid ${countsHours || takesSubjects ? 'form-grid-3' : ''}`}>

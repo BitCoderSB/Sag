@@ -25,7 +25,8 @@ const hours = z.number().min(0).max(500);
 const identifier = z.string().min(1).max(100).regex(/^[a-zA-Z0-9_-]+$/);
 const httpUrl = z.string().trim().max(2048).refine(value => { if (!value) return true; try { const url = new URL(value); return ['https:','http:'].includes(url.protocol) && !url.username && !url.password; } catch { return false; } }, 'Usa un enlace http o https válido.');
 const tags = z.array(text(80).min(1)).max(30).transform(a=>[...new Set(a)]);
-const registration = text(40).min(2).regex(/^[\p{L}\p{N}._-]+$/u, 'El identificador no puede contener espacios.').transform(v=>v.toUpperCase());
+// Opcional: a veces aún no se sabe. Vacío no choca con otros vacíos (el índice único lo ignora).
+const registration = text(40).default('').refine(v=>v===''||/^[\p{L}\p{N}._-]{2,}$/u.test(v),'El identificador no puede contener espacios (mínimo 2 caracteres).').transform(v=>v.toUpperCase());
 const studentShape = { name: text(160).min(2), registration, email: z.union([z.email().max(254),z.literal('')]).default(''), career: text(160).default(''), semester: text(50).default(''), modalities: tags.default([]), technologies: tags.default([]), avatar: z.enum(ANIMALS).optional(), startDate: day.nullable().optional(), endDate: day.nullable().optional(), hoursRequired: z.number().int().min(1).max(5000).nullable().optional(), subjects: z.number().int().min(1).max(20).nullable().optional(), phone: text(40).optional() };
 const studentCreate = z.object(studentShape).strict();
 const studentPatch = z.object({ ...studentShape, version: z.number().int().positive(), status: z.enum(['active','paused','completed']) }).strict();
@@ -174,11 +175,11 @@ export function createApp(options: AppOptions) {
   app.post('/api/students',...mutate,(req,res)=>{
     const body = studentCreate.parse(req.body);
     periodCheck(body);
-    const existing = store.all<Student>('students').find(s=>s.registration.toUpperCase()===body.registration);
+    const existing = body.registration ? store.all<Student>('students').find(s=>s.registration.toUpperCase()===body.registration) : undefined;
     if (existing) fail(409,'Ya existe un alumno con ese identificador. Búscalo y añádelo a tu área.','DUPLICATE_STUDENT');
     const student = store.transaction(()=>{
       const created = store.put<Student>('students',{id:id('student'),...body,avatar:body.avatar ?? pickAnimal(store.all<Student>('students').map(s=>s.avatar)),status:'active',areaIds:[actor(req).areaId!],createdAt:now(),version:1});
-      audit(actor(req),'student_created',created.id,`Alta de ${created.name} (${created.registration}).`);
+      audit(actor(req),'student_created',created.id,`Alta de ${created.name}${created.registration?` (${created.registration})`:''}.`);
       return created;
     });
     res.status(201).json({student});
@@ -249,7 +250,7 @@ export function createApp(options: AppOptions) {
     periodCheck({...student,...body});
     checkVersion(student.version,body.version);
     if (student.areaIds.length>1 && body.status!==student.status) fail(409,'Este alumno participa en varias áreas. Su estado compartido se conserva; puedes cerrar o cancelar las actividades de tu área sin afectar a los demás responsables.','SHARED_STATUS');
-    if (store.all<Student>('students').some(s=>s.id!==student.id&&s.registration.toUpperCase()===body.registration)) fail(409,'Ese identificador ya pertenece a otro alumno.','DUPLICATE_STUDENT');
+    if (body.registration && store.all<Student>('students').some(s=>s.id!==student.id&&s.registration.toUpperCase()===body.registration)) fail(409,'Ese identificador ya pertenece a otro alumno.','DUPLICATE_STUDENT');
     const updated = store.transaction(()=>{ const result = store.put('students',{...student,...body,version:student.version+1}); audit(actor(req),'student_updated',student.id,`Se actualizó el expediente compartido de ${student.name}. Estado: ${body.status}.`); return result; });
     res.json({student:updated});
   });
