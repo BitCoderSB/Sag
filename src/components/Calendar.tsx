@@ -1,3 +1,4 @@
+import LightRays from './LightRays';
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { ArrowRight, ArrowsLeftRight, CalendarBlank, FlagPennant, CalendarPlus, CaretDown, CaretLeft, CaretRight, CaretUp, CheckCircle, Check, ClockCountdown, FileText, Notepad, Play, Plus, Sparkle, UsersThree, WarningCircle, X } from '@phosphor-icons/react';
 import { AREAS, type Assignment, type Meeting, type Review, type Workspace } from '../../shared/types';
@@ -101,7 +102,7 @@ export default function Calendar({ w, selected, onSelect, byArea = false, detail
 
   return <section ref={shell} className={`cal ${detail ? 'cal-live' : ''}`} aria-label="Calendario">
     <div className="cal-card">
-      <CalWaves />
+      <LightRays className="cal-rays" raysOrigin="top-center" raysColor="#5b95ff" lightSpread={0.7} rayLength={1.6} glow={0.55} haze={0.3} intensity={1} opacity={0.9} mouseInfluence={0.08} cursorShadow={false} clickPulse={false} />
       <div className="cal-toolbar">
         <div className="cal-nav">
           <IconButton className="cal-arrow" label="Periodo anterior" onClick={() => move(-1)}><CaretLeft size={18} /></IconButton>
@@ -332,15 +333,5 @@ function RangeSummary({ w, from, to, onClear }: { w: Workspace; from: string; to
   </section>;
 }
 
-/** Ondas de luz del fondo del calendario: decorativas y en movimiento lento. */
-function CalWaves() {
-  return <svg className="cal-waves" viewBox="0 0 1000 300" preserveAspectRatio="none" aria-hidden="true">
-    <defs>
-      <linearGradient id="wave-a" x1="0" x2="1"><stop offset="0" stopColor="#3d7bff" stopOpacity="0" /><stop offset=".55" stopColor="#5b95ff" stopOpacity=".55" /><stop offset="1" stopColor="#9cc0ff" stopOpacity="0" /></linearGradient>
-      <linearGradient id="wave-b" x1="0" x2="1"><stop offset="0" stopColor="#2a5cff" stopOpacity="0" /><stop offset=".6" stopColor="#3f7dff" stopOpacity=".35" /><stop offset="1" stopColor="#2a5cff" stopOpacity="0" /></linearGradient>
-    </defs>
-    <path className="wave wave-1" d="M380 40 C 560 120, 700 -10, 880 70 S 1080 150, 1200 60" stroke="url(#wave-a)" />
-    <path className="wave wave-2" d="M420 10 C 600 90, 760 30, 900 110 S 1060 170, 1200 120" stroke="url(#wave-b)" />
-    <path className="wave wave-3" d="M300 150 C 520 60, 700 190, 900 90 S 1100 40, 1200 80" stroke="url(#wave-b)" />
-  </svg>;
-}
+
+
