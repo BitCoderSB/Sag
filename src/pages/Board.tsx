@@ -2,6 +2,7 @@ import { useState, type CSSProperties, type ReactNode } from 'react';
 import { ArrowRight, Barricade, CalendarBlank, CheckCircle, Circle, CircleHalf, Exam, FileText, Hourglass, Kanban, LinkSimple, ListChecks, Pause, Plus, Rows, SealCheck, Sparkle, Stack, Sun, UserPlus, Users, ArrowsClockwise, ClockCountdown, Flag, Archive, GraduationCap, FolderOpen } from '@phosphor-icons/react';
 import type { ActivityDraft, Assignment, Student, Workspace } from '../../shared/types';
 import { useApp } from '../context';
+import StudentAction from '../components/StudentAction';
 import { RESEARCH_DRIVE, ThesisCycle, daysInPhase, thesisNext } from '../components/Thesis';
 import { nextPhase, phaseInfo, STEP_LABEL, THESIS_PHASES, type ThesisPhase, type ThesisStep } from '../../shared/thesis';
 import { actionsToday, assignmentProgress, dateKey, dayDiff, dueText, formatDate, HEALTH, isLate, isOpen, isWaiting, normalize, pauseOf, PAUSE_LABELS, plural, scoped, studentHealth, timeAgo, today, type Health } from '../lib';
@@ -133,7 +134,7 @@ function ActivitiesBoard() {
         return <div key={st.id} className="kb-lane">
           <div className="kb-lane-head">
             <button type="button" className="kb-person" onClick={() => app.openStudent(st.id)}><StatusAvatar name={st.name} avatar={st.avatar} health={h} size="sm" /><span><strong>{st.name}</strong>{openN === 0 && st.thesis ? <small className="is-thesis">Tesis · {phaseInfo(st.thesis.phase).short}</small> : <small className={openN === 0 ? 'is-idle' : openN > 3 ? 'is-over' : ''}>{openN === 0 ? 'Sin actividad' : openN > 3 ? `${openN} abiertas · sobrecargado` : plural(openN, 'abierta', 'abiertas')}</small>}</span></button>
-            {!ro && openN === 0 && !st.thesis && <Button size="sm" onClick={() => app.modal({ type: 'assignment', studentId: st.id })}><UserPlus size={14} />Asignar</Button>}
+            {!ro && openN === 0 && !st.thesis && <StudentAction student={st} />}
           </div>
           {STAGES.map(s => column(s, mine.filter(c => c.stage === s.id), st.id))}
         </div>;

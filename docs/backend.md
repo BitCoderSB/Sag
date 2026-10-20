@@ -108,3 +108,8 @@ Para restaurar: detener el servidor; conservar la instalación actual como recup
 `npm test` levanta servidores y bases temporales. Cubre sesiones y contraseña, demo desactivada en modo real, jefe de solo lectura en todas las rutas, aislamiento entre áreas, CSRF/origen, rechazo de campos inyectados, identidad global e incorporación idempotente, conflictos de versión, evaluación con cero y nulo, historial de reevaluación, archivos privados, CSV y rollback.
 
 Antes de uso institucional debe concretarse dónde se alojará, quién custodia credenciales y respaldos, y con qué frecuencia se verificará la recuperación. No se incluyen recuperación de contraseña por correo, doble factor ni integración de directorio institucional.
+
+
+## MCP para Claude Code (2026-10-19)
+
+`POST /mcp` (JSON-RPC, transporte HTTP «streamable» sin estado) con `Authorization: Bearer sag_…`. Llaves: tabla `apiTokens` (solo hash), `GET/POST /api/tokens`, `DELETE /api/tokens/:id`, solo desde la sesión del navegador. Con Bearer, el middleware de `/api` identifica a la persona y omite CSRF y Origin. Las herramientas (`server/mcp.ts`) llaman a la API local con la misma llave. Detalle y herramientas: `docs/mcp.md`.

@@ -7,12 +7,16 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdirSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
 import { extname, resolve, sep } from 'node:path';
 import { readSchedule } from './xlsx.js';
+import { mountMcp } from './mcp.js';
 import { Store, checkPassword, id, now, publicUser, type StoredSession } from './db.js';
 import { ANIMALS, isAnimal, pickAnimal } from '../shared/avatars.js';
 import { type ActivityDraft, AREAS, type User, type Student, type Assignment, type Review, type Skill, type Evaluation, type Delivery, type StudentNote, type Meeting, type Attachment, type AuditEvent, type Workspace } from '../shared/types.js';
 import { THESIS_PHASES, phaseInfo, applyThesisAction, type Thesis, type ThesisDocument, type ThesisEvent, type ThesisAction, type ThesisPhase } from '../shared/thesis.js';
 
-type AuthRequest = Request & { actor?: User; session?: StoredSession };
+type AuthRequest = Request & { actor?: User; session?: StoredSession; viaToken?: boolean };
+/** Llave personal para Claude Code (MCP) u otros clientes: se guarda solo su hash. */
+interface ApiToken { id: string; userId: string; hash: string; label: string; createdAt: string; lastUsedAt: string | null }
+const BEARER = /^Bearer (sag_[A-Za-z0-9_-]{43})$/;
 interface FileRecord extends Attachment { storageName: string; mimeType: string }
 interface ThesisFileRecord extends ThesisDocument { storageName: string; mimeType: string }
 interface AppOptions { store: Store; demo?: boolean; uploadsDir?: string; origins?: string[]; secureCookie?: boolean; distDir?: string; sessionHours?: number; trustProxy?: boolean }
@@ -64,22 +68,31 @@ export function createApp(options: AppOptions) {
   app.use('/api', (req,res,next)=> {
     if (!['GET','HEAD','OPTIONS'].includes(req.method)) {
       const origin = req.get('origin');
-      if (!origin || !origins.has(origin)) return res.status(403).json({error:'Origen no autorizado.',code:'ORIGIN_REJECTED'});
+      // Con llave personal (Authorization: Bearer) no hay cookie que robar: el origen no aplica.
+      if (!BEARER.test(req.get('authorization') ?? '') && (!origin || !origins.has(origin))) return res.status(403).json({error:'Origen no autorizado.',code:'ORIGIN_REJECTED'});
       if (!req.is('application/json') && !req.is('multipart/form-data')) return res.status(415).json({error:'Formato de solicitud no admitido.'});
     }
     next();
   });
+  // El MCP recibe documentos en base64 (hasta 10 MB): su cuerpo puede ser mayor que el del resto de la API.
+  app.use('/mcp', express.json({limit:'16mb',strict:true}));
   app.use(express.json({limit:'128kb',strict:true}));
-  app.use('/api', (req: AuthRequest,_res,next)=>{
+  app.use(['/api','/mcp'], (req: AuthRequest,_res,next)=>{
     const token = req.headers.cookie?.split(';').map(v=>v.trim()).find(v=>v.startsWith(cookieName+'='))?.slice(cookieName.length+1);
     if (token && /^[A-Za-z0-9_-]{43}$/.test(token)) {
       const row = store.db.prepare('SELECT * FROM sessions WHERE hash=? AND expires_at>?').get(tokenHash(token),Date.now()) as unknown as StoredSession | undefined;
       if (row) { const user = store.user(row.user_id); if (user) { req.actor = publicUser(user); req.session = row; } }
     }
+    const bearer = BEARER.exec(req.get('authorization') ?? '')?.[1];
+    if (bearer) {
+      const key = store.all<ApiToken>('apiTokens').find(t=>t.hash===tokenHash(bearer)); const user = key && store.user(key.userId);
+      if (user) { req.actor = publicUser(user); req.session = undefined; req.viaToken = true;
+        if (!key!.lastUsedAt || Date.now()-Date.parse(key!.lastUsedAt) > 3600_000) store.put('apiTokens',{...key!,lastUsedAt:now()}); }
+    }
     next();
   });
   const auth = (req: AuthRequest,_res: Response,next: NextFunction) => { if (!req.actor) return next(new ApiError(401,'Inicia sesión para continuar.','AUTH_REQUIRED')); next(); };
-  const csrf = (req: AuthRequest,_res: Response,next: NextFunction) => { const supplied = req.get('x-csrf-token'); if (!req.session || !supplied || !equal(supplied,req.session.csrf)) return next(new ApiError(403,'La sesión de seguridad cambió. Recarga e inténtalo de nuevo.','CSRF_REJECTED')); next(); };
+  const csrf = (req: AuthRequest,_res: Response,next: NextFunction) => { if (req.viaToken) return next(); const supplied = req.get('x-csrf-token'); if (!req.session || !supplied || !equal(supplied,req.session.csrf)) return next(new ApiError(403,'La sesión de seguridad cambió. Recarga e inténtalo de nuevo.','CSRF_REJECTED')); next(); };
   const writer = (req: AuthRequest,_res: Response,next: NextFunction) => { if (req.actor?.role === 'director') return next(new ApiError(403,'La cuenta del jefe es exclusivamente de consulta.','READ_ONLY')); next(); };
   const mutate = [auth,csrf,writer];
   // Única escritura del jefe: agendar reuniones con los responsables. Los datos de alumnos siguen siendo de solo consulta para él.
@@ -152,6 +165,25 @@ export function createApp(options: AppOptions) {
     return { user,areas:AREAS,students,assignments,drafts,reviews:store.all<Review>('reviews').filter(r=>visibleArea(r.areaId)),skills:store.all<Skill>('skills'),deliveries:store.all<Delivery>('deliveries').filter(d=>assignmentIds.has(d.assignmentId)),evaluations,notes:store.all<StudentNote>('notes').filter(n=>visibleArea(n.areaId)),attachments:store.all<FileRecord>('attachments').filter(f=>assignmentIds.has(f.assignmentId)).map(({storageName:_,mimeType:__,...file})=>file),audit:store.all<AuditEvent>('audit').filter(a=>visibleArea(a.areaId)).slice(-200).reverse(),meetings:store.all<Meeting>('meetings').filter(m=>user.role==='director'||m.areaIds.includes(user.areaId!)),thesisDocs:store.all<ThesisFileRecord>('thesisDocs').filter(d=>students.some(s=>s.id===d.studentId&&s.thesis)).map(({storageName:_,mimeType:__,...doc})=>doc) };
   }
   app.get('/api/workspace',auth,(req,res)=>res.json(workspace(actor(req))));
+  // Llaves personales: solo desde la sesión del navegador (una llave no crea otras).
+  const sessionOnly = (req: AuthRequest,_res: Response,next: NextFunction) => { if (req.viaToken) return next(new ApiError(403,'Administra tus llaves desde la página de SAG.','SESSION_ONLY')); next(); };
+  app.get('/api/tokens',auth,sessionOnly,(req,res)=>res.json({tokens:store.all<ApiToken>('apiTokens').filter(t=>t.userId===actor(req).id).map(({hash:_,...t})=>t)}));
+  app.post('/api/tokens',auth,sessionOnly,csrf,(req,res)=>{
+    const {label} = z.object({label:text(80).default('Claude Code')}).strict().parse(req.body);
+    const mine = store.all<ApiToken>('apiTokens').filter(t=>t.userId===actor(req).id);
+    if (mine.length>=5) fail(409,'Ya tienes 5 llaves. Revoca una antes de crear otra.');
+    const token = `sag_${randomBytes(32).toString('base64url')}`;
+    const record: ApiToken = {id:id('token'),userId:actor(req).id,hash:tokenHash(token),label:label||'Claude Code',createdAt:now(),lastUsedAt:null};
+    store.transaction(()=>{ store.put('apiTokens',record); audit(actor(req),'token_created',record.id,`Nueva llave para ${record.label}.`); });
+    const {hash:_,...safe} = record; res.status(201).json({token,record:safe});
+  });
+  app.delete('/api/tokens/:id',auth,sessionOnly,csrf,(req,res)=>{
+    const key = store.get<ApiToken>('apiTokens',String(req.params.id));
+    if (!key || key.userId!==actor(req).id) fail(404,'Llave no encontrada.');
+    store.transaction(()=>{ store.remove('apiTokens',key!.id); audit(actor(req),'token_revoked',key!.id,`Se revocó la llave ${key!.label}.`); });
+    res.status(204).end();
+  });
+  mountMcp(app,{store,demo,authenticate:(req)=>(req as AuthRequest).viaToken ? (req as AuthRequest).actor ?? null : null});
   // Banco de actividades: preparadas sin alumno, por área. Borrar una no toca datos de alumnos.
   const draftBody = z.object({ title: text(200).min(3), description: text(10000).default(''), skillIds: z.array(identifier).max(30).default([]).transform(a=>[...new Set(a)]), links: assignmentCreate.shape.links, phase: text(80).default('') }).strict();
   const draftFor = (req: Request, draftId: string) => { const d = store.get<ActivityDraft>('drafts',draftId) ?? fail(404,'No encontramos esa actividad del banco.'); if (d.areaId!==actor(req).areaId) fail(403,'Esa actividad es de otra área.'); return d; };

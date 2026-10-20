@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { ArrowRight, Barricade, Check, Clock, Pause, File, LinkSimple, PencilSimple, Plus, Trash, UploadSimple, UserPlus, WarningCircle, X } from '@phosphor-icons/react';
 import { AREAS, type ActivityDraft, type AreaId, type Assignment, type Meeting, type PauseKind, type Review, type Student } from '../../shared/types';
 import { useApp, type ModalState } from '../context';
@@ -11,6 +11,7 @@ import { ThesisForm, ThesisStepForm } from './Thesis';
 import type { ThesisAction, ThesisPhase } from '../../shared/thesis';
 import AgreementList, { pendingTitle, previousWithPending } from './Agreements';
 import Certificate from './Certificate';
+import SlotPicker, { agenda, firstFree } from './SlotPicker';
 
 /** Identificadores de lo que devolvió el servidor, para iluminarlos en las listas. */
 function freshIds(result: unknown) {
@@ -237,7 +238,7 @@ function AssignmentForm({ studentId: initialStudentId, dueDate, draft, onClose }
   const { workspace } = useApp(); const { busy, error, setError, save, done } = useSave(onClose);
   const [studentId, setStudentId] = useState(initialStudentId ?? ''); const [title, setTitle] = useState(draft?.title ?? ''); const [description, setDescription] = useState(draft?.description ?? '');
   const [keepDraft, setKeepDraft] = useState(true);
-  const [dueAt, setDueAt] = useState(dueDate ? `${dueDate}T23:59` : futureInput(7, '23:59')); const [firstReviewAt, setFirstReviewAt] = useState(futureInput(3)); const [skillIds, setSkillIds] = useState<string[]>(draft?.skillIds ?? []);
+  const [dueAt, setDueAt] = useState(dueDate ? `${dueDate}T23:59` : futureInput(7, '23:59')); const [firstReviewAt, setFirstReviewAt] = useState(() => suggestSlot(workspace, futureInput(3))); const [skillIds, setSkillIds] = useState<string[]>(draft?.skillIds ?? []);
   const [startAt, setStartAt] = useState(dateKey()); const [phase, setPhase] = useState(draft?.phase ?? '');
   const [linkDraft, setLinkDraft] = useState(''); const [links, setLinks] = useState<{ label: string; url: string }[]>(draft?.links ?? []);
   const [files, setFiles] = useState<globalThis.File[]>([]); const fileInput = useRef<HTMLInputElement>(null);
@@ -248,6 +249,9 @@ function AssignmentForm({ studentId: initialStudentId, dueDate, draft, onClose }
   const students = workspace.students.filter(s => s.areaIds.includes(workspace.user.areaId!) && s.status === 'active').sort((a, b) => a.name.localeCompare(b.name));
   const skills = workspace.skills.filter(s => !s.areaId || s.areaId === workspace.user.areaId);
   const locked = initialStudentId ? workspace.students.find(s => s.id === initialStudentId) : undefined;
+  // Las fases solo ordenan tesis e investigación; Software y Hardware no las piden.
+  const usesPhases = workspace.user.areaId === 'research' || !!phase;
+  const reviewBusy = useMemo(() => agenda(workspace), [workspace]);
   function submit(e: FormEvent) {
     e.preventDefault();
     if (!studentId) { setError('Elige para qué alumno es la actividad.'); return; }
@@ -319,13 +323,12 @@ function AssignmentForm({ studentId: initialStudentId, dueDate, draft, onClose }
             <Field label="Fecha límite" hint={<span className="quick-dates">{quickDue.map(q => { const value = futureInput(q.days, '23:59'); return <button type="button" key={q.days} aria-pressed={dueAt === value} onClick={() => setDueAt(value)}>{q.label}</button>; })}<button type="button" aria-pressed={!dueAt} onClick={() => setDueAt('')}>Sin fecha</button></span>}>
               <input type="datetime-local" value={dueAt} onChange={e => setDueAt(e.target.value)} />
             </Field>
-            <Field label="Primera revisión" required hint="Tu cita para ver cómo va."><input type="datetime-local" required value={firstReviewAt} onChange={e => setFirstReviewAt(e.target.value)} /></Field>
-          </div>
-          {(reviewAfterDue || reviewPast) && <Notice tone="warn" icon={<WarningCircle size={18} weight="fill" />}><p>{reviewPast ? 'La primera revisión quedó en el pasado.' : 'La primera revisión es después de la fecha límite: no verás avances antes de que venza.'} Puedes guardarla así si es intencional.</p></Notice>}
-          <div className="form-grid">
             <Field label="Inicio" hint="Cuándo empieza. Ubica la actividad en su plan."><input type="date" value={startAt} onChange={e => setStartAt(e.target.value)} /></Field>
-            <PhaseField value={phase} onChange={setPhase} studentId={studentId} />
           </div>
+          <div className="field"><span className="field-label">Primera revisión <span className="required" aria-hidden="true">*</span> <span className="muted">· tu cita para ver cómo va</span></span>
+            <SlotPicker value={firstReviewAt} onChange={setFirstReviewAt} minutes={30} busy={reviewBusy} label="Primera revisión" /></div>
+          {(reviewAfterDue || reviewPast) && <Notice tone="warn" icon={<WarningCircle size={18} weight="fill" />}><p>{reviewPast ? 'La primera revisión quedó en el pasado.' : 'La primera revisión es después de la fecha límite: no verás avances antes de que venza.'} Puedes guardarla así si es intencional.</p></Notice>}
+          {usesPhases && <PhaseField value={phase} onChange={setPhase} studentId={studentId} />}
         </FormSection>
         <FormSection title="Material" hint="Opcional. Carpeta de Drive, enunciado u otros documentos.">
           <div className="material-inputs">
@@ -634,7 +637,7 @@ function DraftForm({ draft, remove = false, onClose }: { draft?: ActivityDraft; 
           <div className="chips">{skills.map(s => <label className="chip-check" key={s.id} title={s.description}><input type="checkbox" checked={skillIds.includes(s.id)} onChange={() => setSkillIds(old => old.includes(s.id) ? old.filter(id => id !== s.id) : [...old, s.id])} /><Check size={12} weight="bold" aria-hidden="true" />{s.name}</label>)}</div>
         </fieldset>
         <div className="form-grid">
-          <Field label="Fase" hint="Opcional."><input maxLength={80} value={phase} onChange={e => setPhase(e.target.value)} placeholder="Ej. Desarrollo" /></Field>
+          {(workspace.user.areaId === 'research' || phase) && <Field label="Fase" hint="Opcional."><input maxLength={80} value={phase} onChange={e => setPhase(e.target.value)} placeholder="Ej. Marco teórico" /></Field>}
           <Field label="Enlace del material" hint="Opcional. Carpeta de Drive o enunciado."><input type="text" inputMode="url" maxLength={2000} value={link} onChange={e => setLink(e.target.value)} placeholder="Ej. drive.google.com/…" /></Field>
         </div>
       </div>
@@ -645,19 +648,26 @@ function DraftForm({ draft, remove = false, onClose }: { draft?: ActivityDraft; 
 
 /* ---------- Revisiones ---------- */
 
+/** Horario propuesto: el primer espacio libre de ese día (o desde ahora); si el día está lleno, a las 10:00. */
+function suggestSlot(w: Parameters<typeof agenda>[0], date?: string, minutes = 30, skip?: string) {
+  const busy = agenda(w, skip);
+  if (!date) return firstFree(busy, minutes) ?? futureInput();
+  const day = date.slice(0, 10); const free = firstFree(busy, minutes, Math.max(Date.parse(`${day}T10:00:00-06:00`), Date.now())); // a partir de las 10:00
+  return free?.startsWith(day) ? free : `${day}T10:00`;
+}
+
 function ReviewForm({ studentId: initialStudentId, assignmentId: initialAssignmentId, date, onClose }: { studentId?: string; assignmentId?: string; date?: string; onClose: () => void }) {
   const { workspace } = useApp(); const { busy, error, setError, save, done } = useSave(onClose);
   const lockedAssignment = initialAssignmentId ? workspace.assignments.find(a => a.id === initialAssignmentId) : undefined;
   const lockedStudentId = initialStudentId ?? lockedAssignment?.studentId;
   // Desde un alumno se propone su actividad abierta más urgente; se puede cambiar.
   const [studentId, setStudentId] = useState(lockedStudentId ?? ''); const [assignmentId, setAssignmentId] = useState(initialAssignmentId ?? (lockedStudentId ? currentAssignment(scoped(workspace), lockedStudentId)?.id ?? '' : ''));
-  const [startsAt, setStartsAt] = useState(date ? `${date.slice(0, 10)}T10:00` : futureInput()); const [duration, setDuration] = useState('30'); const [type, setType] = useState<'follow_up' | 'delivery' | 'evaluation'>('follow_up'); const [notes, setNotes] = useState('');
+  const [startsAt, setStartsAt] = useState(() => suggestSlot(workspace, date)); const [duration, setDuration] = useState('30'); const [type, setType] = useState<'follow_up' | 'delivery' | 'evaluation'>('follow_up'); const [notes, setNotes] = useState('');
   const students = workspace.students.filter(s => s.areaIds.includes(workspace.user.areaId!) && s.status === 'active').sort((a, b) => a.name.localeCompare(b.name));
   const assignments = workspace.assignments.filter(a => a.studentId === studentId && a.areaId === workspace.user.areaId && !['cancelled', 'completed'].includes(a.status));
   const student = workspace.students.find(s => s.id === studentId);
   // Solo se ven las revisiones propias: el aviso cubre los choques de tu agenda, no los de otras áreas.
-  const start = startsAt ? Date.parse(fromInput(startsAt) ?? '') : NaN; const end = start + Number(duration) * 60000;
-  const clash = Number.isNaN(start) ? undefined : workspace.reviews.find(r => r.status === 'scheduled' && r.areaId === workspace.user.areaId && Date.parse(r.startsAt) < end && Date.parse(r.startsAt) + r.durationMinutes * 60000 > start);
+  const agendaBusy = useMemo(() => agenda(workspace), [workspace]);
   function submit(e: FormEvent) {
     e.preventDefault();
     if (!studentId) { setError('Elige con qué alumno es la revisión.'); return; }
@@ -678,11 +688,8 @@ function ReviewForm({ studentId: initialStudentId, assignmentId: initialAssignme
             : studentId && <div className="field"><span className="field-label">Sobre qué actividad</span><RichSelect label="Actividad" placeholder="Ninguna, seguimiento general" value={assignmentId} onChange={setAssignmentId} options={[{ value: '', label: 'Ninguna, seguimiento general', sub: 'Una plática sin actividad en particular' }, ...activityOptions(assignments, workspace)]} /></div>}
         </FormSection>
         <FormSection title="Cuándo">
-          <div className="form-grid form-grid-date">
-            <Field label="Fecha y hora" required><input type="datetime-local" required value={startsAt} onChange={e => setStartsAt(e.target.value)} autoFocus={!!lockedStudentId} /></Field>
-            <div className="field"><span className="field-label">Duración (min)</span><Segmented label="Duración en minutos" value={duration} onChange={setDuration} className="segmented-block" options={['15', '30', '45', '60'].map(v => ({ value: v, label: v }))} /></div>
-          </div>
-          {clash && <Notice tone="warn" icon={<WarningCircle size={18} weight="fill" />}><p>Choca con tu revisión de las {formatTime(clash.startsAt)} con {workspace.students.find(s => s.id === clash.studentId)?.name ?? 'otro alumno'}. Puedes guardarla de todos modos.</p></Notice>}
+          <div className="field"><span className="field-label">Duración</span><Segmented label="Duración en minutos" value={duration} onChange={setDuration} className="segmented-block" options={['15', '30', '45', '60'].map(v => ({ value: v, label: `${v} min` }))} /></div>
+          <SlotPicker value={startsAt} onChange={setStartsAt} minutes={Number(duration)} busy={agendaBusy} />
           {when && Date.parse(when) < Date.now() && <Notice tone="warn" icon={<WarningCircle size={18} weight="fill" />}><p>La fecha ya pasó. Si la revisión ya ocurrió, prográmala y regístrala enseguida.</p></Notice>}
         </FormSection>
         <FormSection title="Para qué">
@@ -743,7 +750,7 @@ function ReviewUpdateForm({ review, mode: initialMode, date, early = false, onCl
             <span><strong>{k.label}</strong><small>{k.hint}</small></span>
           </label>)}</div>
         </fieldset>}
-        {initialMode === 'reschedule' && <Field label="Nueva fecha y hora" required hint={`Ahora: ${formatDate(review.startsAt, { weekday: 'short' })}, ${formatTime(review.startsAt)}`}><input type="datetime-local" required value={startsAt} onChange={e => setStartsAt(e.target.value)} autoFocus /></Field>}
+        {initialMode === 'reschedule' && <div className="field"><span className="field-label">Nueva fecha y hora <span className="muted">· ahora {formatDate(review.startsAt, { weekday: 'short' })}, {formatTime(review.startsAt)}</span></span><SlotPicker value={startsAt} onChange={setStartsAt} minutes={review.durationMinutes} busy={agenda(workspace, review.id)} /></div>}
         {initialMode === 'record' && outcomeKind === 'completed' && carried && <div className="carried"><AgreementList review={carried} title={pendingTitle(carried)} editable /><small className="field-hint">Marca los que ya cumplió; los demás pasan a la siguiente cita.</small></div>}
         <div className="field">
           <label className="field-label" htmlFor="review-text">{initialMode === 'record' && outcomeKind === 'completed' ? 'Qué se vio en la revisión' : initialMode === 'reschedule' ? 'Motivo del cambio' : 'Motivo'} <span className="required" aria-hidden="true">*</span></label>
@@ -800,11 +807,8 @@ function MeetingForm({ meeting, date, areaIds: initialAreas, cancel = false, onC
         <fieldset className="choices"><legend>Con <span className="required" aria-hidden="true">*</span></legend>
           <div className="chips">{AREAS.map(a => <label className="chip-check" key={a.id}><input type="checkbox" checked={areas.includes(a.id)} onChange={() => setAreas(old => old.includes(a.id) ? old.filter(x => x !== a.id) : [...old, a.id])} /><Check size={12} weight="bold" aria-hidden="true" />Responsable de {a.name}</label>)}</div>
         </fieldset>
-        <div className="form-grid form-grid-date">
-          <Field label="Fecha y hora" required><input type="datetime-local" required value={startsAt} onChange={e => setStartsAt(e.target.value)} /></Field>
-          <div className="field"><span className="field-label">Duración (min)</span><Segmented label="Duración en minutos" value={duration} onChange={setDuration} className="segmented-block" options={['30', '45', '60', '90'].map(v => ({ value: v, label: v }))} /></div>
-        </div>
-        {clash && <Notice tone="warn" icon={<WarningCircle size={18} weight="fill" />}><p>Choca con «{clash.title}» a las {formatTime(clash.startsAt)}. Puedes guardarla de todos modos.</p></Notice>}
+        <div className="field"><span className="field-label">Duración</span><Segmented label="Duración en minutos" value={duration} onChange={setDuration} className="segmented-block" options={['30', '45', '60', '90'].map(v => ({ value: v, label: `${v} min` }))} /></div>
+        <div className="field"><span className="field-label">Fecha y hora <span className="required" aria-hidden="true">*</span></span><SlotPicker value={startsAt} onChange={setStartsAt} minutes={Number(duration)} busy={agenda(workspace, meeting?.id)} /></div>
         <Field label="Lugar o enlace" hint="Sala, oficina o enlace de videollamada. Opcional."><input maxLength={300} value={place} onChange={e => setPlace(e.target.value)} placeholder="Ej. Sala de juntas o meet.google.com/…" /></Field>
         <Field label="Temas"><textarea rows={3} maxLength={4000} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Opcional" /></Field>
       </div>
@@ -1048,7 +1052,9 @@ function EvaluationForm({ assignment, onClose }: { assignment: Assignment; onClo
               </figure>}
             </div>
             <div className="field"><span className="field-label">Resultado</span><Segmented label="Resultado de la evaluación" className="segmented-block" value={outcome} onChange={setOutcome} options={[{ value: 'completed', label: 'Terminada' }, { value: 'changes_requested', label: 'Pedir correcciones' }]} /></div>
-            {outcome === 'changes_requested' && <Field label="Próxima revisión" hint="Opcional. Crea una cita para revisar las correcciones."><input type="datetime-local" value={nextReviewAt} onChange={e => setNextReviewAt(e.target.value)} /></Field>}
+            {outcome === 'changes_requested' && <div className="field"><span className="field-label">Próxima revisión <span className="muted">· opcional, para revisar las correcciones</span></span>
+              {nextReviewAt ? <><SlotPicker value={nextReviewAt} onChange={setNextReviewAt} minutes={30} busy={agenda(workspace)} label="Próxima revisión" /><button type="button" className="ad-inline-link" onClick={() => setNextReviewAt('')}>Sin cita por ahora</button></>
+                : <Button variant="secondary" size="sm" onClick={() => setNextReviewAt(suggestSlot(workspace, futureInput(3)))}><Plus size={14} />Programar revisión de correcciones</Button>}</div>}
             <div className="field">
               <label className="field-label" htmlFor="evaluation-feedback">Retroalimentación <span className="muted">(opcional)</span></label>
               <div className="quick-notes">{QUICK_FEEDBACK.map(t => <button type="button" key={t} aria-pressed={feedback.includes(t)} onClick={() => setFeedback(f => f.includes(t) ? f.replace(t, '').replace(/\s{2,}/g, ' ').trim() : `${f.trim()} ${t}`.trim())}>{feedback.includes(t) && <Check size={12} weight="bold" aria-hidden="true" />}{t}</button>)}</div>

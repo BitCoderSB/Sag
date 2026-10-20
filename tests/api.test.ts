@@ -521,6 +521,37 @@ test('student fields can stay empty: no registration or modality, and blanks do 
   assert.equal(a.registration,''); assert.equal(b.registration,''); assert.deepEqual(a.modalities,[]);
   assert.equal((await c.request('/api/students','POST',{name:'Con espacios',registration:'A 1'})).status,400);
 });
+test('MCP for Claude Code: personal key, tools follow the same permissions as the page',async()=>{
+  const sw=await session('software'); const boss=await session('director');
+  const created=await jsonOk(await sw.request('/api/tokens','POST',{label:'Claude Code'}),201);
+  assert.match(created.token,/^sag_[A-Za-z0-9_-]{43}$/); assert.equal(created.record.hash,undefined);
+  const key=created.token;
+  const mcp=async(method:string,params:unknown={},token=key)=>{ const r=await fetch(base+'/mcp',{method:'POST',headers:{'content-type':'application/json',accept:'application/json, text/event-stream',authorization:`Bearer ${token}`},body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})}); return {status:r.status,body:await r.json().catch(()=>null)}; };
+  assert.equal((await fetch(base+'/mcp',{method:'POST',headers:{'content-type':'application/json'},body:'{}'})).status,401);
+  const init=await mcp('initialize',{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'test',version:'1'}});
+  assert.equal(init.body.result.serverInfo.name,'sag');
+  const tools=(await mcp('tools/list')).body.result.tools.map((t:{name:string})=>t.name);
+  assert.ok(tools.includes('asignar_actividad')); assert.ok(!tools.includes('agendar_reunion'));
+  const call=async(name:string,args:unknown)=>{ const r=(await mcp('tools/call',{name,arguments:args})).body.result; return {error:!!r.isError,text:r.content[0].text as string}; };
+  const summary=await call('resumen_laboratorio',{}); assert.equal(summary.error,false); assert.match(summary.text,/actividades/);
+  const st=await call('registrar_alumno',{nombre:'Alumno Desde Claude',telefono:'222 000 1111',modalidades:['Colaborador']}); assert.equal(st.error,false,st.text);
+  const asg=await call('asignar_actividad',{alumno:'Desde Claude',titulo:'Prototipo con MCP',descripcion:'Hacer un prototipo',habilidades:['Backend'],fecha_limite:'2026-12-01'}); assert.equal(asg.error,false,asg.text);
+  const adv=await call('registrar_avance',{actividad:'Prototipo con MCP',tipo:'avance',resumen:'Lleva la mitad',avance:50}); assert.equal(adv.error,false,adv.text);
+  const pdf=Buffer.from('%PDF-1.4 prueba').toString('base64');
+  const up=await call('subir_documento',{actividad:'Prototipo con MCP',nombre_archivo:'evidencia.pdf',contenido_base64:pdf,tipo:'evidencia'}); assert.equal(up.error,false,up.text);
+  const slots=await call('buscar_horario_libre',{cuantos:2}); assert.equal(JSON.parse(slots.text).length,2);
+  const missing=await call('ver_alumno',{alumno:'Nadie Inexistente'}); assert.equal(missing.error,true);
+  const w=await jsonOk(await sw.request('/api/workspace')) as Workspace;
+  const a=w.assignments.find(x=>x.title==='Prototipo con MCP')!; assert.ok(a); assert.ok(w.deliveries.some(d=>d.assignmentId===a.id&&d.progress===50)); assert.ok(w.attachments.some(f=>f.assignmentId===a.id));
+  // El jefe con su llave: consulta, no escribe.
+  const bossKey=(await jsonOk(await boss.request('/api/tokens','POST',{}),201)).token;
+  const bossTools=(await mcp('tools/list',{},bossKey)).body.result.tools.map((t:{name:string})=>t.name);
+  assert.ok(bossTools.includes('agendar_reunion')); assert.ok(!bossTools.includes('asignar_actividad'));
+  // Una llave no administra llaves; revocada deja de servir.
+  assert.equal((await fetch(base+'/api/tokens',{headers:{authorization:`Bearer ${key}`}})).status,403);
+  await jsonOk(await sw.request(`/api/tokens/${created.record.id}`,'DELETE',{}).then(r=>{assert.equal(r.status,204);return new Response('{}');}));
+  assert.equal((await mcp('tools/list')).status,401);
+});
 test('thesis workflow: research only, follows the cycle, advances, stays, goes back from math to design',async()=>{
   const re=await session('research'); const sw=await session('software');
   const st=(await jsonOk(await re.request('/api/students','POST',{name:'Tesista Prueba',registration:'TES-TEST-1',modalities:['Tesis'],phone:'221 000 0000'}),201)).student as Student;

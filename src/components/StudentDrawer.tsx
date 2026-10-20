@@ -1,5 +1,5 @@
 import { useRef, useState, type FormEvent } from 'react';
-import { CalendarPlus, Certificate, Pause, Play, EnvelopeSimple, NotePencil, PencilSimple, Plus, TrendUp, TrendDown, Star, Target, ArrowRight } from '@phosphor-icons/react';
+import { CalendarPlus, Certificate, Pause, Play, EnvelopeSimple, Phone, NotePencil, PencilSimple, Plus, TrendUp, TrendDown, Star, Target, ArrowRight } from '@phosphor-icons/react';
 import { useApp } from '../context';
 import { pauseOf, PAUSE_LABELS, activitySteps, assignmentProgress, assignmentState, studentStep, cleanDetail, currentAssignment, dueText, formatDate, formatTime, groupSkillAverages, HEALTH, isOpen, plural, post, punctuality, scoped, skillStats, skillTrend, studentHealth } from '../lib';
 import { AreaTag, Badge, Button, Drawer, Empty, ErrorMessage, Field, Menu, Meter, Notice, ProgressRing, Radar, StatusAvatar, Steps, Tabs, areaName } from './ui';
@@ -58,7 +58,7 @@ export default function StudentDrawer({ id, onClose }: { id: string; onClose: ()
       <StatusAvatar name={student.name} avatar={student.avatar} health={health} size="xl" />
       <div className="drawer-head-text">
         <h2>{student.name}</h2>
-        <p>{[student.registration, student.career, student.semester].filter(Boolean).join(' · ')}</p>
+        <p>{[student.registration, student.career, /^\d+$/.test(student.semester.trim()) ? `${student.semester.trim()}.º semestre` : student.semester].filter(Boolean).join(' · ')}</p>
         <div className="tag-row">{student.areaIds.map(areaId => <AreaTag key={areaId} id={areaId} />)}{full && <Badge tone={HEALTH[health].tone} dot={HEALTH[health].dot}>{HEALTH[health].label}</Badge>}</div>
       </div>
     </header>
@@ -126,10 +126,12 @@ export default function StudentDrawer({ id, onClose }: { id: string; onClose: ()
           </button></li>; })}</ul>
         </section>}
         <section className="drawer-section">
-          <h3>Datos</h3>
+          <h3>Datos{editable && <button type="button" className="text-link" onClick={() => modal({ type: 'student', student })}>Editar<PencilSimple size={13} /></button>}</h3>
           <dl className="facts">
-            {student.email && <><dt>Correo</dt><dd><a href={`mailto:${student.email}`}><EnvelopeSimple size={14} aria-hidden="true" />{student.email}</a></dd></>}
-            {student.modalities.length > 0 && <><dt>Modalidad</dt><dd>{student.modalities.join(', ')}</dd></>}
+            <dt>Teléfono</dt><dd>{student.phone ? <span className="contact-row"><a href={`tel:${student.phone.replace(/[^\d+]/g, '')}`}><Phone size={14} aria-hidden="true" />{student.phone}</a>{student.phone.replace(/\D/g, '').length >= 10 && <a className="contact-wa" href={`https://wa.me/52${student.phone.replace(/\D/g, '').slice(-10)}`} target="_blank" rel="noopener noreferrer">WhatsApp</a>}</span> : <span className="muted">Sin registrar</span>}</dd>
+            <dt>Correo</dt><dd>{student.email ? <a href={`mailto:${student.email}`}><EnvelopeSimple size={14} aria-hidden="true" />{student.email}</a> : <span className="muted">Sin registrar</span>}</dd>
+            <dt>Matrícula</dt><dd>{student.registration || <span className="muted">Sin registrar</span>}</dd>
+            <dt>Modalidad</dt><dd>{student.modalities.length ? student.modalities.join(', ') : <span className="muted">Sin registrar</span>}{student.subjects ? ` · ${plural(student.subjects, 'materia', 'materias')}` : ''}</dd>
             <dt>Tecnologías</dt><dd>{student.technologies.length ? <span className="tag-row">{student.technologies.map(t => <span className="chip" key={t}>{t}</span>)}</span> : <span className="muted">Sin registrar</span>}</dd>
             <dt>Alta</dt><dd>{formatDate(student.createdAt, { year: 'numeric' })}</dd>
           </dl>

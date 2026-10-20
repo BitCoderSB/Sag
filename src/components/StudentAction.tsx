@@ -1,8 +1,8 @@
-import { CalendarBlank, Exam, Plus, TrendUp } from '@phosphor-icons/react';
+import { CalendarBlank, CalendarPlus, CaretDown, ClipboardText, Exam, Plus, TrendUp } from '@phosphor-icons/react';
 import type { Student } from '../../shared/types';
 import { useApp } from '../context';
 import { scoped, studentStep } from '../lib';
-import { Button } from './ui';
+import { Button, Menu } from './ui';
 
 const ICON = { assign: Plus, progress: TrendUp, evaluate: Exam, reschedule: CalendarBlank };
 
@@ -21,6 +21,11 @@ export default function StudentAction({ student, full = false, size = 'sm', prim
     else app.modal({ type: 'progress', assignment: step.assignment });
   }
   const text = full ? step.label : step.short;
+  // Sin trabajo abierto: «Asignar» ofrece una actividad o una revisión (una plática para arrancar).
+  if (step.kind === 'assign' && !full) return <span onClick={e => e.stopPropagation()}><Menu label={`Asignar a ${student.name}`} align="end" items={[
+    { label: 'Actividad', icon: <ClipboardText size={16} />, onSelect: () => app.modal({ type: 'assignment', studentId: student.id }) },
+    { label: 'Revisión o reunión', icon: <CalendarPlus size={16} />, onSelect: () => app.modal({ type: 'review', studentId: student.id }) },
+  ]} trigger={<Button size={size} variant={primary ? 'primary' : 'secondary'} className="student-action action-assign" aria-label={`Asignar a ${student.name}`}><Plus size={14} weight="bold" aria-hidden="true" />Asignar<CaretDown size={12} weight="bold" aria-hidden="true" /></Button>} /></span>;
   return <Button size={size} variant={primary || step.kind === 'evaluate' ? 'primary' : 'secondary'} className={`student-action action-${step.kind}`}
     onClick={e => { e.stopPropagation(); run(); }} aria-label={full ? undefined : `${text}: ${student.name}`} title={step.assignment ? `${step.label} · ${step.assignment.title}` : step.label}>
     <Icon size={14} weight="bold" aria-hidden="true" />{text}
