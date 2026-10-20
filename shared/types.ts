@@ -29,6 +29,10 @@ export interface Student {
   hoursRequired?: number | null;
   /** Materias que cursa con el laboratorio (modalidad «Materias»). Opcional. */
   subjects?: number | null;
+  /** Nivel de dificultad con que trabaja (Nivel 1 a 3). Opcional. */
+  level?: string | null;
+  /** Carpeta de Drive del alumno (entregas, material). Opcional. */
+  folderUrl?: string;
 }
 export interface Skill { id: string; name: string; areaId: AreaId | null; description: string }
 export type AssignmentStatus = 'in_progress' | 'pending_review' | 'changes_requested' | 'completed' | 'cancelled';

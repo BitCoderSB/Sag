@@ -156,6 +156,7 @@ function StudentForm({ student, onClose }: { student?: Student; onClose: () => v
   // Al registrar, el avatar ya viene elegido (el animal menos repetido); se puede cambiar antes de guardar.
   const [startDate, setStartDate] = useState(student ? student.startDate ?? '' : dateKey()); const [endDate, setEndDate] = useState(student?.endDate ?? ''); const [hoursRequired, setHoursRequired] = useState(student?.hoursRequired ? String(student.hoursRequired) : '');
   const [subjects, setSubjects] = useState(student?.subjects ? String(student.subjects) : '');
+  const [level, setLevel] = useState(student?.level ?? ''); const [folderUrl, setFolderUrl] = useState(student?.folderUrl ?? '');
   const countsHours = modalities.some(m => HOUR_MODALITIES.includes(m)); const takesSubjects = modalities.includes('Materias');
   const [avatar, setAvatar] = useState<AnimalId>(() => student?.avatar ?? pickAnimal(workspace.students.map(s => s.avatar)));
   const [pickAvatar, setPickAvatar] = useState(false);
@@ -168,7 +169,7 @@ function StudentForm({ student, onClose }: { student?: Student; onClose: () => v
     if (selected) { if (selected.areaIds.includes(areaId)) { onClose(); openStudent(selected.id); return; } await save(() => post(`/students/${selected.id}/join`, {}), `${firstName(selected.name)} ahora también está en tu área.`); return; }
     if (duplicate) { setSelected(duplicate); setError('Esa matrícula ya tiene expediente. Puedes incorporarlo a tu área.'); return; }
     if (startDate && endDate && endDate < startDate) { setError('La fecha de término debe ser posterior al inicio.'); return; }
-    const body = { name: name.trim(), registration: registration.trim(), email: email.trim(), phone: phone.trim(), career: career.trim(), semester: semester.trim(), modalities, technologies: [...new Set(technologies.split(',').map(s => s.trim()).filter(Boolean))], avatar, startDate: startDate || null, endDate: endDate || null, hoursRequired: countsHours && hoursRequired ? Number(hoursRequired) : null, subjects: takesSubjects && subjects ? Number(subjects) : null, status };
+    const body = { name: name.trim(), registration: registration.trim(), email: email.trim(), phone: phone.trim(), career: career.trim(), semester: semester.trim(), modalities, technologies: [...new Set(technologies.split(',').map(s => s.trim()).filter(Boolean))], avatar, startDate: startDate || null, endDate: endDate || null, hoursRequired: countsHours && hoursRequired ? Number(hoursRequired) : null, subjects: takesSubjects && subjects ? Number(subjects) : null, level: level || null, folderUrl: folderUrl.trim() ? toHttpUrl(folderUrl) ?? '' : '', status };
     await save(() => student ? patch(`/students/${student.id}`, { ...body, version: student.version }) : post('/students', (({ status: _, ...fields }) => fields)(body)), student ? 'Expediente actualizado.' : `${firstName(body.name)} quedó registrado en tu área.`, student ? 'Guardado' : 'Registrado');
   }
   const submitLabel = selected ? selected.areaIds.includes(areaId) ? 'Abrir expediente' : 'Incorporar a mi área' : student ? 'Guardar cambios' : <><UserPlus size={16} />Registrar alumno</>;
@@ -218,6 +219,10 @@ function StudentForm({ student, onClose }: { student?: Student; onClose: () => v
             {takesSubjects && !countsHours && <Field label="Número de materias" hint="Opcional."><input type="number" inputMode="numeric" min={1} max={20} step={1} value={subjects} onChange={e => setSubjects(e.target.value)} placeholder="Ej. 2" /></Field>}
           </div>
           {takesSubjects && countsHours && <div className="form-grid form-grid-3"><Field label="Número de materias" hint="Opcional."><input type="number" inputMode="numeric" min={1} max={20} step={1} value={subjects} onChange={e => setSubjects(e.target.value)} placeholder="Ej. 2" /></Field></div>}
+          <div className="form-grid">
+            <Field label="Nivel" hint="Opcional. Dificultad con la que trabaja."><select value={level} onChange={e => setLevel(e.target.value)}><option value="">Sin nivel</option>{['Nivel 1', 'Nivel 2', 'Nivel 3'].map(l => <option key={l} value={l}>{l}</option>)}{level && !['Nivel 1', 'Nivel 2', 'Nivel 3'].includes(level) && <option value={level}>{level}</option>}</select></Field>
+            <Field label="Carpeta de Drive" hint="Opcional. Donde guarda sus entregas."><input inputMode="url" maxLength={2000} value={folderUrl} onChange={e => setFolderUrl(e.target.value)} placeholder="drive.google.com/drive/folders/…" /></Field>
+          </div>
           </FormSection>
           {student && <FormSection title="Perfil técnico">
           <Field label="Tecnologías" hint="Separadas por comas. Son experiencia declarada, no calificaciones."><input maxLength={500} value={technologies} onChange={e => setTechnologies(e.target.value)} placeholder="Ej. Python, React, Figma" /></Field>

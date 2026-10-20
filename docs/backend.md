@@ -113,3 +113,5 @@ Antes de uso institucional debe concretarse dónde se alojará, quién custodia 
 ## MCP para Claude Code (2026-10-19)
 
 `POST /mcp` (JSON-RPC, transporte HTTP «streamable» sin estado) con `Authorization: Bearer sag_…`. Llaves: tabla `apiTokens` (solo hash), `GET/POST /api/tokens`, `DELETE /api/tokens/:id`, solo desde la sesión del navegador. Con Bearer, el middleware de `/api` identifica a la persona y omite CSRF y Origin. Las herramientas (`server/mcp.ts`) llaman a la API local con la misma llave. Detalle y herramientas: `docs/mcp.md`.
+
+Alumno (2026-10-19): `level` (Nivel 1–3, opcional) y `folderUrl` (carpeta de Drive). `scripts/import-lab-dashboard.ts <xlsx> <base> [área] [--apply]` importa el control del laboratorio (directorio → alumnos, bitácora como nota, inactivos en pausa; registro de tareas → actividades con su carpeta y entrega). `server/xlsx.ts` expone `readWorkbook` (todas las hojas con enlaces).

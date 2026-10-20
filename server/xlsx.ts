@@ -59,3 +59,26 @@ export function readSchedule(buf: Buffer): ThesisPlanItem[] | null {
   }
   return plan.length >= 2 ? plan.slice(0, 40) : null;
 }
+
+/** Todas las hojas de un .xlsx: filas como arreglos de texto (columna A = 0) y los enlaces de cada celda («C4»). */
+export function readWorkbook(buf: Buffer): { name: string; rows: Map<number, string[]>; links: Map<string, string> }[] {
+  const files = unzip(buf, n => n.startsWith('xl/'));
+  const strings = [...(files.get('xl/sharedStrings.xml') ?? '').matchAll(/<si>([\s\S]*?)<\/si>/g)].map(m => decode(m[1]));
+  const rels = new Map([...(files.get('xl/_rels/workbook.xml.rels') ?? '').matchAll(/<Relationship\b[^>]*>/g)].map(m => [/Id="([^"]+)"/.exec(m[0])?.[1] ?? '', /Target="([^"]+)"/.exec(m[0])?.[1] ?? '']));
+  const col = (c: string) => [...c].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1;
+  return [...(files.get('xl/workbook.xml') ?? '').matchAll(/<sheet\b[^>]*>/g)].map(m => {
+    const name = decode(/name="([^"]+)"/.exec(m[0])?.[1] ?? ''); const rid = /r:id="([^"]+)"/.exec(m[0])?.[1] ?? '';
+    const target = (rels.get(rid) ?? '').replace(/^\/?(xl\/)?/, 'xl/'); const sheet = files.get(target) ?? '';
+    const rows = new Map<number, string[]>();
+    for (const c of sheet.matchAll(/<c r="([A-Z]+)(\d+)"([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+      const [, letters, row, attrs, inner = ''] = c;
+      const v = /<v>([\s\S]*?)<\/v>/.exec(inner)?.[1] ?? /<is>([\s\S]*?)<\/is>/.exec(inner)?.[1];
+      if (v === undefined) continue;
+      const list = rows.get(+row) ?? []; list[col(letters)] = (/t="s"/.test(attrs) ? strings[Number(v)] ?? '' : decode(v)).trim(); rows.set(+row, list);
+    }
+    const sheetRels = files.get(target.replace('worksheets/', 'worksheets/_rels/') + '.rels') ?? '';
+    const targets = new Map([...sheetRels.matchAll(/<Relationship\b[^>]*>/g)].map(r => [/Id="([^"]+)"/.exec(r[0])?.[1] ?? '', decode(/Target="([^"]+)"/.exec(r[0])?.[1] ?? '')]));
+    const links = new Map<string, string>([...sheet.matchAll(/<hyperlink\b[^>]*>/g)].map((h): [string, string] => [/ref="([^"]+)"/.exec(h[0])?.[1] ?? '', targets.get(/r:id="([^"]+)"/.exec(h[0])?.[1] ?? '') ?? '']).filter(([, url]) => url));
+    return { name, rows, links };
+  });
+}

@@ -132,6 +132,8 @@ export default function StudentDrawer({ id, onClose }: { id: string; onClose: ()
             <dt>Correo</dt><dd>{student.email ? <a href={`mailto:${student.email}`}><EnvelopeSimple size={14} aria-hidden="true" />{student.email}</a> : <span className="muted">Sin registrar</span>}</dd>
             <dt>Matrícula</dt><dd>{student.registration || <span className="muted">Sin registrar</span>}</dd>
             <dt>Modalidad</dt><dd>{student.modalities.length ? student.modalities.join(', ') : <span className="muted">Sin registrar</span>}{student.subjects ? ` · ${plural(student.subjects, 'materia', 'materias')}` : ''}</dd>
+            {student.level && <><dt>Nivel</dt><dd>{student.level}</dd></>}
+            {student.folderUrl && <><dt>Carpeta</dt><dd><a href={student.folderUrl} target="_blank" rel="noopener noreferrer">Abrir en Drive</a></dd></>}
             <dt>Tecnologías</dt><dd>{student.technologies.length ? <span className="tag-row">{student.technologies.map(t => <span className="chip" key={t}>{t}</span>)}</span> : <span className="muted">Sin registrar</span>}</dd>
             <dt>Alta</dt><dd>{formatDate(student.createdAt, { year: 'numeric' })}</dd>
           </dl>
