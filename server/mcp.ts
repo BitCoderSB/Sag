@@ -11,9 +11,12 @@ import type { Store } from './db.js';
 
 type Json = Record<string, unknown>;
 interface Tool { name: string; description: string; inputSchema: Json; run: (args: Json, ctx: Ctx) => Promise<unknown> }
-interface Ctx { user: User; call: <T = Json>(method: string, path: string, body?: unknown) => Promise<T>; upload: (path: string, fields: Record<string, string>, name: string, data: Buffer) => Promise<Json> }
+interface Ctx { raw: (path: string) => Promise<{ data: Buffer; type: string; disposition: string }>; user: User; call: <T = Json>(method: string, path: string, body?: unknown) => Promise<T>; upload: (path: string, fields: Record<string, string>, name: string, data: Buffer) => Promise<Json> }
 
 const PROTOCOL = '2025-06-18';
+/** El jefe consulta (y agenda reuniones); los responsables no agendan reuniones. */
+const READ_ONLY = new Set(['resumen_laboratorio', 'listar_alumnos', 'ver_alumno', 'listar_actividades', 'listar_habilidades', 'buscar_horario_libre', 'listar_revisiones', 'detectar_choques', 'listar_banco', 'listar_reuniones', 'listar_documentos', 'descargar_documento', 'exportar_csv', 'historial', 'exportar_datos', 'ranking_habilidades', 'carga_y_plazos', 'listar_endpoints', 'llamar_api']);
+const BOSS = new Set(['agendar_reunion', 'editar_reunion']);
 const s = (description: string, extra: Json = {}) => ({ type: 'string', description, ...extra });
 const n = (description: string, extra: Json = {}) => ({ type: 'number', description, ...extra });
 const obj = (properties: Json, required: string[] = []) => ({ type: 'object', properties, required, additionalProperties: false });
@@ -52,6 +55,40 @@ function findAssignment(w: Workspace, ref: unknown, student?: Student): Assignme
   if (!hits.length) fail(`No encontré la actividad «${q}»${student ? ` de ${student.name}` : ''}.`);
   return fail(`«${q}» coincide con varias actividades: ${hits.slice(0, 8).map(a => `${a.title} · ${w.students.find(x => x.id === a.studentId)?.name} (${a.id})`).join('; ')}. Indica también el alumno o usa el id.`);
 }
+const dayOf = (iso: string) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Mexico_City' }).format(new Date(iso));
+const reviewLine = (w: Workspace, r: Review) => ({ id: r.id, alumno: w.students.find(x => x.id === r.studentId)?.name, actividad: w.assignments.find(t => t.id === r.assignmentId)?.title ?? 'seguimiento general', cuando: local(r.startsAt), duracion_min: r.durationMinutes, tipo: r.type, estado: r.status, temas: r.notes || undefined, resultado: r.outcome || undefined, acuerdos: r.agreements?.map(g => `${g.done ? '✓' : '·'} ${g.text}`) });
+/** Una revisión por id, o por alumno (y fecha actual si tiene varias programadas). */
+function findReview(w: Workspace, a: Json): Review {
+  if (a.revision) return w.reviews.find(x => x.id === a.revision) ?? fail('No encontré esa revisión; usa listar_revisiones.');
+  const x = findStudent(w, a.alumno); let list = w.reviews.filter(r => r.studentId === x.id && r.status === 'scheduled');
+  if (a.fecha_actual) { const t = String(a.fecha_actual); list = list.filter(r => t.length === 10 ? dayOf(r.startsAt) === t : Math.abs(Date.parse(r.startsAt) - Date.parse(when(t, 'fecha_actual'))) < 60_000); }
+  if (list.length === 1) return list[0];
+  if (!list.length) fail(`${x.name} no tiene revisiones programadas${a.fecha_actual ? ' en esa fecha' : ''}.`);
+  return fail(`${x.name} tiene varias revisiones programadas: ${list.map(r => `${local(r.startsAt)} (${r.id})`).join('; ')}. Indica fecha_actual o el id.`);
+}
+/** Mapa de la API para llamar_api. */
+const API_DOCS = [
+  'GET /workspace — todo lo que puedes ver (alumnos, actividades, entregas, evaluaciones, revisiones, notas, habilidades, reuniones, banco, documentos, historial)',
+  'GET /export — CSV',
+  'POST /students {name, registration?, email?, phone?, career?, semester?, modalities?[], technologies?[], startDate?, endDate?, hoursRequired?, subjects?}',
+  'PATCH /students/:id {…mismos campos, status: active|paused|completed, version}',
+  'POST /students/:id/join {} · POST /students/:id/pause {kind: temporary|health|exams|no_contact, reason?, returnAt?, assignments: keep|cancel, cancelReviews?} · POST /students/:id/resume {}',
+  'PUT /students/:id/thesis {topic, estimateMonths, proposalUrl, driveUrl, callAvailability, phase?, step?} · POST /students/:id/thesis/actions {action, note, to?, version}',
+  'POST /students/:id/thesis/files (multipart: file, kind) · GET|DELETE /thesis-files/:id',
+  'POST /assignments {studentId, title, description, dueAt?, reviewAt, skillIds[], startAt?, phase?, priority?: normal|high, links?[{label,url}]}',
+  'PATCH /assignments/:id {version, title?, description?, dueAt?, startAt?, phase?, links?, status?: in_progress|pending_review|changes_requested|completed|cancelled, changeReason?, blockedReason?, blockNote?, blockedReviewAt?}',
+  'POST /assignments/:id/deliveries {version, receivedAt, summary, url?, completeness: partial|complete|not_submitted, hours?, progress?}',
+  'POST /assignments/:id/evaluations {version, scores[{skillId, score 0-10|null, comment?}], feedback?, outcome: completed|changes_requested, nextReviewAt?, reviewId?}',
+  'POST /assignments/:id/files (multipart: file, kind: instruction|evidence) · GET /files/:id',
+  'POST /reviews {studentId, assignmentId?, startsAt, durationMinutes?, type: follow_up|delivery|evaluation, notes?}',
+  'PATCH /reviews/:id {version, status?: scheduled|completed|cancelled|missed, outcome?, startsAt?, changeReason?, hours?, agreements?[{id?, text, done}]}',
+  'POST /reviews/:id/agreements/:agreementId {done}',
+  'POST /notes {studentId, text}',
+  'POST /skills {name, description}',
+  'POST /drafts {title, description?, skillIds?, links?, phase?} · PATCH /drafts/:id {…, version} · DELETE /drafts/:id',
+  'POST /meetings {title, startsAt, durationMinutes?, areaIds[], place?, notes?} (jefe) · PATCH /meetings/:id {version, …, status?: cancelled}',
+  'Fechas ISO 8601 (con zona; el laboratorio usa -06:00). Las ediciones piden la version actual del registro (está en /workspace).',
+];
 const statusLabel: Record<string, string> = { in_progress: 'en curso', pending_review: 'por evaluar', changes_requested: 'con correcciones', completed: 'terminada', cancelled: 'cancelada' };
 const assignmentLine = (w: Workspace, a: Assignment) => ({
   id: a.id, titulo: a.title, alumno: w.students.find(x => x.id === a.studentId)?.name, estado: statusLabel[a.status] ?? a.status,
@@ -192,7 +229,7 @@ const TOOLS: Tool[] = [
   { name: 'buscar_horario_libre', description: 'Primeros horarios libres de tu agenda (8:00–20:00, cada 30 min), sin chocar con revisiones ni reuniones.',
     inputSchema: obj({ duracion_min: n('Por omisión 30.'), desde: s('AAAA-MM-DD o AAAA-MM-DD HH:MM (por omisión, ahora).'), cuantos: n('Por omisión 5.') }),
     run: async (a, ctx) => { const w = await ctx.call<Workspace>('GET', '/workspace'); return freeSlots(w, Number(a.duracion_min ?? 30), a.desde ? Math.max(Date.now(), Date.parse(when(String(a.desde).length === 10 ? `${a.desde} 08:00` : a.desde, 'desde'))) : Date.now(), Number(a.cuantos ?? 5)).map(local); } },
-  { name: 'programar_revision', description: 'Programa una revisión con un alumno. Sin fecha, toma el primer horario libre. Avisa si choca con otra cita.',
+  { name: 'programar_revision', description: 'Programa una revisión NUEVA con un alumno (para cambiar una existente usa mover_revision). Sin fecha, toma el primer horario libre. Avisa si choca con otra cita.',
     inputSchema: obj({ alumno: s('Nombre, matrícula o id.'), actividad: s('Opcional: título o id; sin ella es seguimiento general.'), cuando: s('AAAA-MM-DD HH:MM (opcional).'), duracion_min: n('15 a 120, por omisión 30.'), tipo: s('seguimiento, entrega o evaluacion.', { enum: ['seguimiento', 'entrega', 'evaluacion'] }), temas: s('Opcional.') }, ['alumno']),
     run: async (a, ctx) => {
       const w = await ctx.call<Workspace>('GET', '/workspace'); const x = findStudent(w, a.alumno); const minutes = Number(a.duracion_min ?? 30);
@@ -202,10 +239,10 @@ const TOOLS: Tool[] = [
       const r = await ctx.call<{ review: Review }>('POST', '/reviews', { studentId: x.id, assignmentId: t?.id ?? null, startsAt: start, durationMinutes: minutes, type: a.tipo === 'entrega' ? 'delivery' : a.tipo === 'evaluacion' ? 'evaluation' : 'follow_up', notes: String(a.temas ?? '') });
       return { programada: local(start), id: r.review?.id, alumno: x.name, aviso: clash ? `Choca con otra cita. Horarios libres: ${freeSlots(w, minutes, Date.parse(start)).slice(0, 3).map(local).join(', ')}` : undefined };
     } },
-  { name: 'registrar_revision', description: 'Registra el resultado de una revisión: si se realizó, qué se vio y acuerdos; o la cancela / reprograma.',
-    inputSchema: obj({ revision: s('Id de la revisión (ver_alumno las lista).'), accion: s('realizada, no_se_realizo, cancelar o reprogramar.', { enum: ['realizada', 'no_se_realizo', 'cancelar', 'reprogramar'] }), texto: s('Qué se vio, o el motivo.'), acuerdos: { type: 'array', items: { type: 'string' } }, nueva_fecha: s('Para reprogramar: AAAA-MM-DD HH:MM.'), horas: n('Horas (opcional).') }, ['revision', 'accion', 'texto']),
+  { name: 'registrar_revision', description: 'Registra el resultado de una revisión (si se realizó, qué se vio y acuerdos) o que no se realizó. Para cambiar la fecha usa mover_revision; para cancelar, cancelar_revision. Acepta id o alumno + fecha_actual.',
+    inputSchema: obj({ revision: s('Id (opcional si das alumno).'), alumno: s('Opcional.'), fecha_actual: s('AAAA-MM-DD o AAAA-MM-DD HH:MM.'), accion: s('realizada, no_se_realizo, cancelar o reprogramar.', { enum: ['realizada', 'no_se_realizo', 'cancelar', 'reprogramar'] }), texto: s('Qué se vio, o el motivo.'), acuerdos: { type: 'array', items: { type: 'string' } }, nueva_fecha: s('Para reprogramar: AAAA-MM-DD HH:MM.'), horas: n('Horas (opcional).') }, ['accion', 'texto']),
     run: async (a, ctx) => {
-      const w = await ctx.call<Workspace>('GET', '/workspace'); const r = w.reviews.find(x => x.id === a.revision) ?? fail('No encontré esa revisión; usa ver_alumno para ver sus ids.');
+      const w = await ctx.call<Workspace>('GET', '/workspace'); const r = findReview(w, a);
       const body: Json = { version: r.version };
       if (a.accion === 'realizada') Object.assign(body, { status: 'completed', outcome: a.texto, agreements: ((a.acuerdos as string[]) ?? []).map(text => ({ text, done: false })), ...(a.horas ? { hours: Number(a.horas) } : {}) });
       else if (a.accion === 'no_se_realizo') Object.assign(body, { status: 'missed', outcome: a.texto });
@@ -239,6 +276,137 @@ const TOOLS: Tool[] = [
   { name: 'agendar_reunion', description: 'Solo el jefe: agenda una reunión con uno o varios responsables (software, hardware, research).',
     inputSchema: obj({ titulo: s(''), cuando: s('AAAA-MM-DD HH:MM'), duracion_min: n('Por omisión 60.'), con: { type: 'array', items: { type: 'string', enum: ['software', 'hardware', 'research'] } }, lugar: s(''), temas: s('') }, ['titulo', 'cuando', 'con']),
     run: async (a, ctx) => { await ctx.call('POST', '/meetings', { title: String(a.titulo), startsAt: when(a.cuando, 'cuando'), durationMinutes: Number(a.duracion_min ?? 60), areaIds: a.con, place: String(a.lugar ?? ''), notes: String(a.temas ?? '') }); return { agendada: `${a.titulo} · ${local(when(a.cuando, 'cuando'))}` }; } },
+  { name: 'listar_revisiones', description: 'Revisiones (citas) con su id, alumno, actividad, fecha, duración y estado. Filtra por alumno, día o rango. Úsalo antes de mover, cancelar o registrar una revisión.',
+    inputSchema: obj({ alumno: s('Opcional.'), dia: s('AAAA-MM-DD (opcional).'), desde: s('AAAA-MM-DD (opcional).'), hasta: s('AAAA-MM-DD (opcional).'), estado: s('scheduled (por omisión), completed, cancelled, missed o all.') }),
+    run: async (a, ctx) => {
+      const w = await ctx.call<Workspace>('GET', '/workspace'); const x = a.alumno ? findStudent(w, a.alumno) : undefined; const st = String(a.estado ?? 'scheduled');
+      const from = a.dia ? String(a.dia) : a.desde ? String(a.desde) : null; const to = a.dia ? String(a.dia) : a.hasta ? String(a.hasta) : null;
+      return w.reviews.filter(r => (!x || r.studentId === x.id) && (st === 'all' || r.status === st) && (!from || dayOf(r.startsAt) >= from) && (!to || dayOf(r.startsAt) <= to))
+        .sort((p, q) => p.startsAt.localeCompare(q.startsAt)).map(r => reviewLine(w, r));
+    } },
+  { name: 'detectar_choques', description: 'Citas que se enciman (revisiones y reuniones) en un día o en los próximos 14 días, con horarios libres sugeridos.',
+    inputSchema: obj({ dia: s('AAAA-MM-DD (opcional).') }),
+    run: async (a, ctx) => {
+      const w = await ctx.call<Workspace>('GET', '/workspace'); const now = Date.now();
+      const items = [...w.reviews.filter(r => r.status === 'scheduled').map(r => ({ id: r.id, que: `Revisión con ${w.students.find(x => x.id === r.studentId)?.name}`, start: Date.parse(r.startsAt), end: Date.parse(r.startsAt) + r.durationMinutes * 60000 })),
+        ...w.meetings.filter(m => m.status === 'scheduled').map(m => ({ id: m.id, que: `Reunión: ${m.title}`, start: Date.parse(m.startsAt), end: Date.parse(m.startsAt) + m.durationMinutes * 60000 }))]
+        .filter(i => a.dia ? dayOf(new Date(i.start).toISOString()) === a.dia : i.end >= now && i.start <= now + 14 * 86_400_000).sort((p, q) => p.start - q.start);
+      const out: Json[] = [];
+      for (let i = 0; i < items.length; i++) for (let j = i + 1; j < items.length && items[j].start < items[i].end; j++) out.push({ cita_1: `${items[i].que} · ${local(new Date(items[i].start).toISOString())} (${items[i].id})`, cita_2: `${items[j].que} · ${local(new Date(items[j].start).toISOString())} (${items[j].id})`, horarios_libres: freeSlots(w, Math.round((items[j].end - items[j].start) / 60000), items[j].start, 3).map(local) });
+      return out.length ? out : 'Sin choques.';
+    } },
+  { name: 'mover_revision', description: 'Cambia la fecha y hora de una revisión que ya existe (no crea otra). Identifícala por id, o por alumno (y su fecha actual si tiene varias).',
+    inputSchema: obj({ revision: s('Id (opcional si das alumno).'), alumno: s('Opcional.'), fecha_actual: s('AAAA-MM-DD o AAAA-MM-DD HH:MM, para elegir entre varias.'), nueva_fecha: s('AAAA-MM-DD HH:MM, o «primer_libre».'), motivo: s('Motivo del cambio.') }, ['nueva_fecha']),
+    run: async (a, ctx) => {
+      const w = await ctx.call<Workspace>('GET', '/workspace'); const r = findReview(w, a);
+      const to = a.nueva_fecha === 'primer_libre' ? freeSlots(w, r.durationMinutes)[0] ?? fail('No hay horarios libres.') : when(a.nueva_fecha, 'nueva_fecha');
+      await ctx.call('PATCH', `/reviews/${r.id}`, { version: r.version, startsAt: to, changeReason: String(a.motivo ?? 'Ajuste de agenda') });
+      return { movida: `${w.students.find(x => x.id === r.studentId)?.name}: ${local(r.startsAt)} → ${local(to)}` };
+    } },
+  { name: 'mover_revisiones', description: 'Reorganiza varias revisiones de una vez (por ejemplo, para quitar choques). Cada cambio: id de la revisión y nueva fecha.',
+    inputSchema: obj({ cambios: { type: 'array', items: obj({ revision: s('Id.'), nueva_fecha: s('AAAA-MM-DD HH:MM') }, ['revision', 'nueva_fecha']) }, motivo: s('Motivo (opcional).') }, ['cambios']),
+    run: async (a, ctx) => {
+      const out: string[] = [];
+      for (const c of a.cambios as Json[]) {
+        const w = await ctx.call<Workspace>('GET', '/workspace'); const r = w.reviews.find(x => x.id === c.revision);
+        if (!r) { out.push(`✗ ${String(c.revision)}: no encontrada`); continue; }
+        try { const to = when(c.nueva_fecha, 'nueva_fecha'); await ctx.call('PATCH', `/reviews/${r.id}`, { version: r.version, startsAt: to, changeReason: String(a.motivo ?? 'Ajuste de agenda') }); out.push(`✓ ${w.students.find(x => x.id === r.studentId)?.name}: ${local(r.startsAt)} → ${local(to)}`); }
+        catch (e) { out.push(`✗ ${String(c.revision)}: ${(e as Error).message}`); }
+      }
+      return out;
+    } },
+  { name: 'cancelar_revision', description: 'Cancela una revisión (queda en el historial con el motivo). Identifícala por id o por alumno y fecha.',
+    inputSchema: obj({ revision: s('Id (opcional si das alumno).'), alumno: s('Opcional.'), fecha_actual: s('AAAA-MM-DD o AAAA-MM-DD HH:MM.'), motivo: s('Motivo.') }, ['motivo']),
+    run: async (a, ctx) => { const w = await ctx.call<Workspace>('GET', '/workspace'); const r = findReview(w, a);
+      await ctx.call('PATCH', `/reviews/${r.id}`, { version: r.version, status: 'cancelled', changeReason: String(a.motivo) }); return { cancelada: `${w.students.find(x => x.id === r.studentId)?.name} · ${local(r.startsAt)}` }; } },
+  { name: 'marcar_acuerdo', description: 'Marca como cumplido (o reabre) un acuerdo de una revisión. listar_revisiones muestra los acuerdos.',
+    inputSchema: obj({ revision: s('Id de la revisión.'), acuerdo: s('Texto (o parte) del acuerdo.'), cumplido: { type: 'boolean', description: 'Por omisión true.' } }, ['revision', 'acuerdo']),
+    run: async (a, ctx) => { const w = await ctx.call<Workspace>('GET', '/workspace'); const r = w.reviews.find(x => x.id === a.revision) ?? fail('Revisión no encontrada.');
+      const g = r.agreements?.find(x => norm(x.text).includes(norm(String(a.acuerdo)))) ?? fail(`No encontré ese acuerdo. Acuerdos: ${(r.agreements ?? []).map(x => x.text).join(' | ') || 'ninguno'}.`);
+      await ctx.call('POST', `/reviews/${r.id}/agreements/${g.id}`, { done: a.cumplido !== false }); return { listo: `${a.cumplido === false ? 'Reabierto' : 'Cumplido'}: ${g.text}` }; } },
+  { name: 'pausar_alumno', description: 'Pausa la participación de un alumno en tu área (baja temporal, salud, exámenes o sin contacto).',
+    inputSchema: obj({ alumno: s('Nombre, matrícula o id.'), tipo: s('temporary, health, exams o no_contact.', { enum: ['temporary', 'health', 'exams', 'no_contact'] }), motivo: s('Opcional.'), regresa: s('AAAA-MM-DD (opcional).'), cancelar_actividades: { type: 'boolean', description: 'Por omisión false (se conservan).' } }, ['alumno', 'tipo']),
+    run: async (a, ctx) => { const w = await ctx.call<Workspace>('GET', '/workspace'); const x = findStudent(w, a.alumno);
+      await ctx.call('POST', `/students/${x.id}/pause`, { kind: a.tipo, reason: String(a.motivo ?? ''), returnAt: a.regresa ?? null, assignments: a.cancelar_actividades ? 'cancel' : 'keep', cancelReviews: true }); return { pausado: x.name }; } },
+  { name: 'retomar_alumno', description: 'Retoma la participación de un alumno en pausa.', inputSchema: obj({ alumno: s('Nombre, matrícula o id.') }, ['alumno']),
+    run: async (a, ctx) => { const w = await ctx.call<Workspace>('GET', '/workspace'); const x = findStudent(w, a.alumno); await ctx.call('POST', `/students/${x.id}/resume`, {}); return { retomado: x.name }; } },
+  { name: 'incorporar_alumno', description: 'Agrega a tu área un alumno que ya existe en otra área (sin duplicarlo).', inputSchema: obj({ alumno: s('Nombre, matrícula o id.') }, ['alumno']),
+    run: async (a, ctx) => { const w = await ctx.call<Workspace>('GET', '/workspace'); const x = findStudent(w, a.alumno); await ctx.call('POST', `/students/${x.id}/join`, {}); return { incorporado: x.name }; } },
+  { name: 'listar_banco', description: 'Banco de actividades preparadas de tu área (sin alumno todavía).', inputSchema: obj({}),
+    run: async (_a, ctx) => { const w = await ctx.call<Workspace>('GET', '/workspace'); return (w.drafts ?? []).map(d => ({ id: d.id, titulo: d.title, descripcion: d.description, habilidades: d.skillIds.map(id => w.skills.find(k => k.id === id)?.name), fase: d.phase || undefined, enlaces: d.links.map(l => l.url) })); } },
+  { name: 'guardar_en_banco', description: 'Crea o edita una actividad del banco (para asignarla después a uno o varios alumnos).',
+    inputSchema: obj({ id: s('Id para editar (opcional).'), titulo: s('Título.'), descripcion: s('Opcional.'), habilidades: { type: 'array', items: { type: 'string' } }, fase: s('Opcional.'), enlaces: { type: 'array', items: { type: 'string' } } }, ['titulo']),
+    run: async (a, ctx) => { const w = await ctx.call<Workspace>('GET', '/workspace');
+      const body = { title: String(a.titulo), description: String(a.descripcion ?? ''), skillIds: a.habilidades ? await skillIds(ctx, w, a.habilidades) : [], phase: String(a.fase ?? ''), links: ((a.enlaces as string[]) ?? []).map(url => ({ label: url.replace(/^https?:\/\//, '').slice(0, 60), url })) };
+      if (a.id) { const d = (w.drafts ?? []).find(x => x.id === a.id) ?? fail('No está en el banco.'); await ctx.call('PATCH', `/drafts/${d.id}`, { ...body, version: d.version }); return { editada: body.title }; }
+      await ctx.call('POST', '/drafts', body); return { guardada: body.title }; } },
+  { name: 'borrar_de_banco', description: 'Quita una actividad del banco (no afecta las ya asignadas).', inputSchema: obj({ actividad: s('Título o id.') }, ['actividad']),
+    run: async (a, ctx) => { const w = await ctx.call<Workspace>('GET', '/workspace'); const d = (w.drafts ?? []).find(x => x.id === a.actividad || norm(x.title).includes(norm(String(a.actividad)))) ?? fail('No está en el banco.');
+      await ctx.call('DELETE', `/drafts/${d.id}`, {}); return { quitada: d.title }; } },
+  { name: 'asignar_desde_banco', description: 'Asigna una actividad del banco a uno o varios alumnos; cada uno recibe su primera revisión en el primer horario libre, salvo que la indiques.',
+    inputSchema: obj({ actividad: s('Título o id en el banco.'), alumnos: { type: 'array', items: { type: 'string' } }, fecha_limite: s('AAAA-MM-DD (opcional).'), primera_revision: s('AAAA-MM-DD HH:MM (opcional).') }, ['actividad', 'alumnos']),
+    run: async (a, ctx) => { const out: string[] = [];
+      for (const ref of a.alumnos as string[]) {
+        const w = await ctx.call<Workspace>('GET', '/workspace'); const d = (w.drafts ?? []).find(x => x.id === a.actividad || norm(x.title).includes(norm(String(a.actividad)))) ?? fail('No está en el banco.');
+        try { const x = findStudent(w, ref); const review = a.primera_revision ? when(a.primera_revision, 'primera_revision') : freeSlots(w, 30, Date.now() + 2 * 86_400_000, 1)[0];
+          await ctx.call('POST', '/assignments', { studentId: x.id, title: d.title, description: d.description, dueAt: a.fecha_limite ? when(a.fecha_limite, 'fecha_limite') : null, reviewAt: review, skillIds: d.skillIds.length ? d.skillIds : await skillIds(ctx, w, ['General']), phase: d.phase, links: d.links }); out.push(`✓ ${x.name} · revisión ${local(review)}`); }
+        catch (e) { out.push(`✗ ${ref}: ${(e as Error).message}`); }
+      }
+      return out; } },
+  { name: 'crear_habilidad', description: 'Agrega una habilidad a tu área.', inputSchema: obj({ nombre: s('Nombre.'), descripcion: s('Qué debe demostrar el alumno.') }, ['nombre', 'descripcion']),
+    run: async (a, ctx) => { await ctx.call('POST', '/skills', { name: String(a.nombre), description: String(a.descripcion) }); return { creada: a.nombre }; } },
+  { name: 'listar_reuniones', description: 'Reuniones del jefe con los responsables.', inputSchema: obj({}),
+    run: async (_a, ctx) => (await ctx.call<Workspace>('GET', '/workspace')).meetings.map(m => ({ id: m.id, titulo: m.title, cuando: local(m.startsAt), duracion_min: m.durationMinutes, con: m.areaIds, lugar: m.place || undefined, estado: m.status })) },
+  { name: 'editar_reunion', description: 'Solo el jefe: cambia o cancela una reunión.', inputSchema: obj({ reunion: s('Id o título.'), titulo: s('Opcional.'), cuando: s('AAAA-MM-DD HH:MM'), duracion_min: n('Opcional.'), con: { type: 'array', items: { type: 'string', enum: ['software', 'hardware', 'research'] } }, lugar: s('Opcional.'), temas: s('Opcional.'), cancelar: { type: 'boolean' } }, ['reunion']),
+    run: async (a, ctx) => { const w = await ctx.call<Workspace>('GET', '/workspace'); const m = w.meetings.find(x => x.id === a.reunion || norm(x.title).includes(norm(String(a.reunion)))) ?? fail('Reunión no encontrada.');
+      const body: Json = { version: m.version }; if (a.titulo) body.title = a.titulo; if (a.cuando) body.startsAt = when(a.cuando, 'cuando'); if (a.duracion_min) body.durationMinutes = Number(a.duracion_min); if (a.con) body.areaIds = a.con; if (a.lugar !== undefined) body.place = a.lugar; if (a.temas !== undefined) body.notes = a.temas; if (a.cancelar) body.status = 'cancelled';
+      await ctx.call('PATCH', `/meetings/${m.id}`, body); return { listo: a.cancelar ? `Cancelada: ${m.title}` : `Actualizada: ${m.title}` }; } },
+  { name: 'datos_tesis', description: 'Investigación: inicia o edita los datos de la tesis (tema, meses estimados, enlaces, disponibilidad para llamadas).',
+    inputSchema: obj({ alumno: s('Nombre, matrícula o id.'), tema: s('Opcional.'), meses: n('Opcional.'), enlace_propuesta: s('URL'), carpeta_drive: s('URL'), disponibilidad: s('Ej. martes 3:30 p. m.'), fase_inicial: s('Solo al iniciar.'), paso_inicial: s('kickoff, working, review o call (solo al iniciar).') }, ['alumno']),
+    run: async (a, ctx) => { const w = await ctx.call<Workspace>('GET', '/workspace'); const x = findStudent(w, a.alumno); const t = x.thesis;
+      await ctx.call('PUT', `/students/${x.id}/thesis`, { topic: String(a.tema ?? t?.topic ?? ''), estimateMonths: a.meses !== undefined ? Number(a.meses) : t?.estimateMonths ?? null, proposalUrl: String(a.enlace_propuesta ?? t?.proposalUrl ?? ''), driveUrl: String(a.carpeta_drive ?? t?.driveUrl ?? ''), callAvailability: String(a.disponibilidad ?? t?.callAvailability ?? ''), ...(!t ? { phase: a.fase_inicial ?? 'preproposal', step: a.paso_inicial ?? 'kickoff' } : {}) });
+      return { listo: `Tesis de ${x.name} ${t ? 'actualizada' : 'iniciada'}` }; } },
+  { name: 'listar_documentos', description: 'Documentos subidos (de actividades y de tesis), con su id para descargarlos.', inputSchema: obj({ alumno: s('Opcional.') }),
+    run: async (a, ctx) => { const w = await ctx.call<Workspace>('GET', '/workspace'); const x = a.alumno ? findStudent(w, a.alumno) : undefined;
+      return [...w.attachments.filter(f => !x || w.assignments.some(t => t.id === f.assignmentId && t.studentId === x.id)).map(f => ({ id: f.id, nombre: f.name, de: `actividad «${w.assignments.find(t => t.id === f.assignmentId)?.title}»`, tipo: f.kind, kb: Math.round(f.size / 1024) })),
+        ...(w.thesisDocs ?? []).filter(d => !x || d.studentId === x.id).map(d => ({ id: d.id, nombre: d.name, de: `tesis de ${w.students.find(y => y.id === d.studentId)?.name}`, tipo: d.kind, kb: Math.round(d.size / 1024) }))]; } },
+  { name: 'descargar_documento', description: 'Devuelve un documento en base64 para guardarlo o leerlo. Usa el id de listar_documentos.', inputSchema: obj({ id: s('Id del documento.') }, ['id']),
+    run: async (a, ctx) => { const id = String(a.id); const r = await ctx.raw(id.startsWith('tdoc') ? `/thesis-files/${id}` : `/files/${id}`);
+      return { nombre: decodeURIComponent(/filename\*?=(?:UTF-8'')?"?([^";]+)/i.exec(r.disposition)?.[1] ?? id), tipo: r.type, base64: r.data.toString('base64') }; } },
+  { name: 'borrar_documento_tesis', description: 'Investigación: quita un documento del expediente de tesis.', inputSchema: obj({ id: s('Id del documento (tdoc_…).') }, ['id']),
+    run: async (a, ctx) => { await ctx.call('DELETE', `/thesis-files/${String(a.id)}`, {}); return { borrado: a.id }; } },
+  { name: 'exportar_csv', description: 'El reporte CSV de la página (alumnos, estado y promedio por habilidad), como texto.', inputSchema: obj({}),
+    run: async (_a, ctx) => (await ctx.raw('/export')).data.toString('utf8') },
+  { name: 'ranking_habilidades', description: 'Promedios por habilidad: de un alumno, o el ranking del laboratorio en una habilidad (para Talento, reportes o gráficas).',
+    inputSchema: obj({ alumno: s('Opcional: sus promedios por habilidad.'), habilidad: s('Opcional: ranking de alumnos en esa habilidad.') }),
+    run: async (a, ctx) => {
+      const w = await ctx.call<Workspace>('GET', '/workspace'); const evs = w.evaluations.filter(e => e.current);
+      const avg = (vals: number[]) => vals.length ? Math.round(vals.reduce((p, q) => p + q, 0) / vals.length * 10) / 10 : null;
+      if (a.alumno) { const x = findStudent(w, a.alumno);
+        return w.skills.map(k => ({ habilidad: k.name, promedio: avg(evs.filter(e => e.studentId === x.id).flatMap(e => e.scores.filter(sc => sc.skillId === k.id && sc.score !== null).map(sc => sc.score!))) })).filter(r => r.promedio !== null).sort((p, q) => q.promedio! - p.promedio!); }
+      const k = a.habilidad ? w.skills.find(y => norm(y.name).includes(norm(String(a.habilidad)))) ?? fail('Habilidad no encontrada.') : undefined;
+      if (k) return w.students.map(x => ({ alumno: x.name, promedio: avg(evs.filter(e => e.studentId === x.id).flatMap(e => e.scores.filter(sc => sc.skillId === k.id && sc.score !== null).map(sc => sc.score!))) })).filter(r => r.promedio !== null).sort((p, q) => q.promedio! - p.promedio!);
+      return w.skills.map(y => ({ habilidad: y.name, promedio: avg(evs.flatMap(e => e.scores.filter(sc => sc.skillId === y.id && sc.score !== null).map(sc => sc.score!))), evaluaciones: evs.filter(e => e.scores.some(sc => sc.skillId === y.id && sc.score !== null)).length }));
+    } },
+  { name: 'carga_y_plazos', description: 'Carga de trabajo: entregas por vencer en los próximos días, alumnos sobrecargados (más de 3 abiertas), quién termina su periodo pronto y avance de horas.',
+    inputSchema: obj({ dias: n('Ventana en días (por omisión 14).') }),
+    run: async (a, ctx) => {
+      const w = await ctx.call<Workspace>('GET', '/workspace'); const now = Date.now(); const span = Number(a.dias ?? 14) * 86_400_000;
+      const open = w.assignments.filter(t => !['completed', 'cancelled'].includes(t.status));
+      const hours = (id: string) => [...w.deliveries.filter(d => w.assignments.some(t => t.id === d.assignmentId && t.studentId === id)).map(d => d.hours ?? 0), ...w.reviews.filter(r => r.studentId === id).map(r => r.hours ?? 0)].reduce((p, q) => p + q, 0);
+      return {
+        por_vencer: open.filter(t => t.dueAt && Date.parse(t.dueAt) >= now && Date.parse(t.dueAt) <= now + span).sort((p, q) => p.dueAt!.localeCompare(q.dueAt!)).map(t => assignmentLine(w, t)),
+        sobrecargados: w.students.map(x => ({ alumno: x.name, abiertas: open.filter(t => t.studentId === x.id).length })).filter(r => r.abiertas > 3),
+        terminan_pronto: w.students.filter(x => x.endDate && Date.parse(`${x.endDate}T12:00:00-06:00`) >= now && Date.parse(`${x.endDate}T12:00:00-06:00`) <= now + span).map(x => ({ alumno: x.name, termina: x.endDate })),
+        horas: w.students.filter(x => x.hoursRequired).map(x => ({ alumno: x.name, llevadas: hours(x.id), requeridas: x.hoursRequired })),
+      };
+    } },
+  { name: 'listar_endpoints', description: 'Lista TODAS las rutas de la API de SAG con su cuerpo esperado. Úsala con llamar_api para hacer cualquier cosa que no tenga herramienta propia.', inputSchema: obj({}),
+    run: async () => API_DOCS },
+  { name: 'llamar_api', description: 'Llama directamente a cualquier ruta de la API de SAG (con tus permisos): GET, POST, PATCH, PUT o DELETE. Sirve para cualquier operación nueva que no tenga herramienta. Consulta listar_endpoints primero. Las rutas empiezan sin /api, ej. /workspace.',
+    inputSchema: obj({ metodo: s('GET, POST, PATCH, PUT o DELETE.', { enum: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'] }), ruta: s('Ej. /reviews/review_123'), cuerpo: { type: 'object', description: 'JSON del cuerpo (POST, PATCH, PUT, DELETE).' } }, ['metodo', 'ruta']),
+    run: async (a, ctx) => { const ruta = String(a.ruta).replace(/^\/?api/, ''); if (!ruta.startsWith('/')) fail('La ruta debe empezar con /.');
+      return ctx.call(String(a.metodo), ruta, a.metodo === 'GET' ? undefined : (a.cuerpo ?? {})); } },
   { name: 'historial', description: 'Últimos movimientos registrados (quién hizo qué y cuándo).', inputSchema: obj({ limite: n('Por omisión 30, máximo 200.') }),
     run: async (a, ctx) => (await ctx.call<Workspace>('GET', '/workspace')).audit.slice(0, Math.min(200, Number(a.limite ?? 30))).map(e => `${local(e.createdAt)} · ${e.actorName}: ${e.detail}`) },
   { name: 'exportar_datos', description: 'Todos los datos que puedes ver (alumnos, actividades, entregas, evaluaciones, revisiones, habilidades) en JSON compacto, para análisis, tablas o diagramas (Mermaid, gráficas).',
@@ -264,6 +432,11 @@ export function mountMcp(app: Express, options: { store: Store; demo: boolean; a
         if (!r.ok) fail((data as Json).error as string ?? `Error ${r.status}`);
         return data as never;
       },
+      raw: async (path) => {
+        const r = await fetch(base + path, { headers: { authorization: auth } });
+        if (!r.ok) fail(((await r.json().catch(() => ({}))) as Json).error as string ?? `Error ${r.status}`);
+        return { data: Buffer.from(await r.arrayBuffer()), type: r.headers.get('content-type') ?? '', disposition: r.headers.get('content-disposition') ?? '' };
+      },
       upload: async (path, fields, name, data) => {
         const form = new FormData(); for (const [k, v] of Object.entries(fields)) form.set(k, v); form.set('file', new Blob([new Uint8Array(data)]), name);
         const r = await fetch(base + path, { method: 'POST', headers: { authorization: auth }, body: form }); const out = await r.json().catch(() => ({}));
@@ -275,9 +448,9 @@ export function mountMcp(app: Express, options: { store: Store; demo: boolean; a
       const ok = (result: unknown) => ({ jsonrpc: '2.0', id, result });
       try {
         if (method === 'initialize') return ok({ protocolVersion: (params?.protocolVersion as string) ?? PROTOCOL, capabilities: { tools: {} }, serverInfo: { name: 'sag', title: 'SAG · Seguimiento de alumnos', version: '1.0.0' },
-          instructions: `Eres el asistente de ${user.name} en SAG (laboratorio). ${user.role === 'director' ? 'Es el jefe: consulta todas las áreas y solo agenda reuniones.' : `Es responsable del área ${user.areaId}.`} Fechas en hora del centro de México (AAAA-MM-DD HH:MM). Para documentos locales, lee el archivo y usa subir_documento con su base64. Para diagramas, usa exportar_datos o resumen_laboratorio y genera Mermaid o gráficas.${options.demo ? ' (Sitio de prueba con datos ficticios.)' : ''}` });
+          instructions: `Eres el asistente de ${user.name} en SAG (laboratorio). ${user.role === 'director' ? 'Es el jefe: consulta todas las áreas y solo agenda reuniones.' : `Es responsable del área ${user.areaId}.`} Fechas en hora del centro de México (AAAA-MM-DD HH:MM). Para documentos locales, lee el archivo y usa subir_documento con su base64. Para diagramas, usa exportar_datos o resumen_laboratorio y genera Mermaid o gráficas. Si no hay herramienta para algo, usa listar_endpoints y llamar_api. Antes de mover o cancelar citas usa listar_revisiones; nunca dupliques una revisión para moverla.${options.demo ? ' (Sitio de prueba con datos ficticios.)' : ''}` });
         if (method === 'ping') return ok({});
-        if (method === 'tools/list') return ok({ tools: TOOLS.filter(t => user.role === 'director' ? !['registrar_alumno', 'editar_alumno', 'asignar_actividad', 'editar_actividad', 'registrar_avance', 'evaluar_actividad', 'programar_revision', 'registrar_revision', 'marcar_impedimento', 'agregar_nota', 'subir_documento', 'tesis_paso'].includes(t.name) : t.name !== 'agendar_reunion')
+        if (method === 'tools/list') return ok({ tools: TOOLS.filter(t => user.role === 'director' ? READ_ONLY.has(t.name) || BOSS.has(t.name) : !BOSS.has(t.name))
           .map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) });
         if (method === 'tools/call') {
           const tool = TOOLS.find(t => t.name === params?.name);

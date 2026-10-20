@@ -24,6 +24,13 @@ SAG expone un servidor MCP en `/mcp` (HTTP «streamable», sin estado). Cada per
 | `tesis_paso` | Flujo de tesis (Investigación) |
 | `agendar_reunion` | Solo el jefe |
 | `historial`, `exportar_datos` | Bitácora y datos en JSON para tablas, gráficas o diagramas Mermaid |
+| `listar_revisiones`, `mover_revision`, `mover_revisiones`, `cancelar_revision`, `detectar_choques`, `marcar_acuerdo` | Agenda: ver, mover una o varias (sin duplicar), cancelar, encontrar choques, acuerdos |
+| `pausar_alumno`, `retomar_alumno`, `incorporar_alumno` | Participación |
+| `listar_banco`, `guardar_en_banco`, `borrar_de_banco`, `asignar_desde_banco` | Banco de actividades (asignar a varios a la vez) |
+| `crear_habilidad`, `ranking_habilidades`, `carga_y_plazos` | Habilidades, promedios/ranking, vencimientos, sobrecarga, horas |
+| `listar_reuniones`, `editar_reunion` | Reuniones (editar/cancelar: jefe) |
+| `datos_tesis`, `listar_documentos`, `descargar_documento`, `borrar_documento_tesis`, `exportar_csv` | Tesis, documentos (descarga en base64) y reporte CSV |
+| `listar_endpoints`, `llamar_api` | Cualquier otra operación de la API con tus permisos (para lo que no tenga herramienta propia) |
 
 Fechas en hora del centro de México: `AAAA-MM-DD HH:MM`.
 

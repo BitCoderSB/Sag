@@ -541,6 +541,15 @@ test('MCP for Claude Code: personal key, tools follow the same permissions as th
   const up=await call('subir_documento',{actividad:'Prototipo con MCP',nombre_archivo:'evidencia.pdf',contenido_base64:pdf,tipo:'evidencia'}); assert.equal(up.error,false,up.text);
   const slots=await call('buscar_horario_libre',{cuantos:2}); assert.equal(JSON.parse(slots.text).length,2);
   const missing=await call('ver_alumno',{alumno:'Nadie Inexistente'}); assert.equal(missing.error,true);
+  // Mover una revisión no crea otra; cancelar la deja cancelada; la API completa queda a la mano.
+  const before=(await jsonOk(await sw.request('/api/workspace')) as Workspace).reviews.filter(r=>r.status==='scheduled').length;
+  const mine=JSON.parse((await call('listar_revisiones',{alumno:'Desde Claude'})).text); assert.equal(mine.length,1);
+  const moved=await call('mover_revision',{alumno:'Desde Claude',nueva_fecha:'2026-12-02 12:00',motivo:'Ajuste'}); assert.equal(moved.error,false,moved.text);
+  assert.equal((await jsonOk(await sw.request('/api/workspace')) as Workspace).reviews.filter(r=>r.status==='scheduled').length,before);
+  assert.equal((await call('cancelar_revision',{revision:mine[0].id,motivo:'Ya no aplica'})).error,false);
+  assert.equal((await call('detectar_choques',{})).error,false);
+  assert.match((await call('listar_endpoints',{})).text,/POST \/reviews/);
+  const raw=await call('llamar_api',{metodo:'POST',ruta:'/notes',cuerpo:{studentId:JSON.parse(st.text).id,text:'Nota vía API'}}); assert.equal(raw.error,false,raw.text);
   const w=await jsonOk(await sw.request('/api/workspace')) as Workspace;
   const a=w.assignments.find(x=>x.title==='Prototipo con MCP')!; assert.ok(a); assert.ok(w.deliveries.some(d=>d.assignmentId===a.id&&d.progress===50)); assert.ok(w.attachments.some(f=>f.assignmentId===a.id));
   // El jefe con su llave: consulta, no escribe.
