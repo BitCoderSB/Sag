@@ -3531,3 +3531,5 @@ body.is-dragging .bank-person:not(.is-over-drop) { box-shadow: inset 0 0 0 1px r
 .win-caret { display: inline-block; width: 1px; height: 15px; margin-left: 1px; vertical-align: -3px; background: #fff; animation: caret 1s steps(1) infinite; }
 @keyframes caret { 50% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .win-caret { animation: none; } }
+.mcp-mode { margin: 6px 0 4px; }
+.win-ps { background: #012456; box-shadow: inset 0 0 0 1px #2d5a9e; }

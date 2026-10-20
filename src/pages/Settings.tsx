@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { Check, Copy, Key, MagnifyingGlass, Plus, WarningCircle } from '@phosphor-icons/react';
+import { Check, Copy, Key, Plus } from '@phosphor-icons/react';
 import { useApp } from '../context';
 import { api, del, formatDate, post } from '../lib';
 import { AreaTag, Badge, Button, ErrorMessage, Field, Modal, PageHeader, SectionTitle, areaName } from '../components/ui';
@@ -59,13 +59,14 @@ const SUGGESTIONS = ['Dame un resumen de las actividades de Ana esta semana', 'R
 /** Conectar Claude Code con SAG: una llave personal y un comando para copiar. La llave se muestra una sola vez. */
 function ClaudeCode() {
   const app = useApp();
-  const [keys, setKeys] = useState<KeyRecord[] | null>(null); const [fresh, setFresh] = useState(''); const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [copied, setCopied] = useState(false);
+  const [keys, setKeys] = useState<KeyRecord[] | null>(null); const [fresh, setFresh] = useState(''); const [busy, setBusy] = useState(false); const [error, setError] = useState('');
   useEffect(() => { if (app.params.get('s') === 'claude') document.getElementById('settings-claude')?.scrollIntoView({ block: 'start' }); }, [app.params]);
   useEffect(() => { api<{ tokens: KeyRecord[] }>('/tokens').then(r => setKeys(r.tokens)).catch(e => setError((e as Error).message)); }, []);
-  const command = `claude mcp add --transport http --scope user sag ${location.origin}/mcp --header "Authorization: Bearer ${fresh || 'TU_LLAVE'}"`;
+  const config = { type: 'http', url: `${location.origin}/mcp`, headers: { Authorization: `Bearer ${fresh}` } };
+  const prompt = `Conecta este servidor MCP a mi Claude Code a nivel usuario. Nombre: sag. Tipo: http. URL: ${location.origin}/mcp. Encabezado: Authorization: Bearer ${fresh}. Si el comando claude está disponible, usa: claude mcp add --transport http --scope user sag ${location.origin}/mcp --header "Authorization: Bearer ${fresh}". Si no, agrégalo tú en el archivo .claude.json de mi carpeta de usuario, dentro de mcpServers, con esta configuración y sin cambiar nada más: ${JSON.stringify(config)}. Al terminar, dime que abra una sesión nueva.`;
   async function create() {
     setBusy(true); setError('');
-    try { const r = await post<{ token: string; record: KeyRecord }>('/tokens', { label: 'Claude Code' }); setFresh(r.token); setKeys(k => [...(k ?? []), r.record]); setCopied(false); }
+    try { const r = await post<{ token: string; record: KeyRecord }>('/tokens', { label: 'Claude Code' }); setFresh(r.token); setKeys(k => [...(k ?? []), r.record]); }
     catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
   async function revoke(k: KeyRecord) {
@@ -73,46 +74,31 @@ function ClaudeCode() {
     try { await del(`/tokens/${k.id}`); setKeys(list => (list ?? []).filter(x => x.id !== k.id)); app.toast('Llave revocada: ya no da acceso.'); }
     catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
-  async function copy() { try { await navigator.clipboard.writeText(command); setCopied(true); } catch { setError('No pude copiar; selecciona el comando y cópialo.'); } }
   return <section className="settings-section" aria-labelledby="settings-claude">
     <SectionTitle id="settings-claude" title="Claude Code">{<Button size="sm" onClick={create} loading={busy}><Key size={14} weight="bold" />Crear llave y conectar</Button>}</SectionTitle>
     <p className="settings-note">Conecta Claude Code con SAG para pedirle cosas en lenguaje natural: {app.readonly ? 'resúmenes, listas y diagramas de todas las áreas, y agendar reuniones' : 'registrar avances, asignar actividades, subir documentos, programar revisiones, resúmenes y diagramas'}. Usa tus mismos permisos.</p>
     <ErrorMessage message={error} />
     {fresh && <ol className="mcp-steps">
-      <li>
-        <span className="mcp-step-n" aria-hidden="true">1</span>
-        <div>
-          <h4>Abre el «Símbolo del sistema» (cmd) de Windows</h4>
-          <p>No es el navegador. Haz clic en <strong>Buscar</strong> en la barra de Windows (abajo), escribe <strong>cmd</strong> y abre <strong>Símbolo del sistema</strong>.</p>
-          <div className="win-demo" aria-hidden="true">
-            <div className="win-result"><span className="win-cmd-icon">&gt;_</span><span><strong>Símbolo del sistema</strong><small>Aplicación</small></span><span className="win-open">Abrir</span></div>
-            <div className="win-bar"><span className="win-logo"><i /><i /><i /><i /></span><span className="win-search"><MagnifyingGlass size={15} /><span>cmd<b className="win-caret" /></span></span></div>
-          </div>
-          <p className="mcp-how">Se abre una ventana negra: ahí va el comando del paso 2. <span className="muted">¿Usas Mac? Abre la app «Terminal» (⌘ + Espacio, escribe Terminal).</span></p>
-        </div>
-      </li>
-      <li>
-        <span className="mcp-step-n" aria-hidden="true">2</span>
-        <div>
-          <h4>Pega este comando y presiona <kbd>Enter</kbd> <span className="muted">· solo una vez</span></h4>
-          <div className="mcp-command"><code>{command}</code><Button size="sm" variant={copied ? 'secondary' : 'primary'} onClick={copy}>{copied ? <><Check size={14} weight="bold" />Copiado</> : <><Copy size={14} />Copiar</>}</Button></div>
-          <p className="mcp-how">Se pega con <kbd>Ctrl</kbd> + <kbd>V</kbd> o con <strong>clic derecho</strong>. Verás <code className="mcp-inline">Added HTTP MCP server sag</code>.</p>
-          <p className="mcp-warn"><WarningCircle size={15} weight="fill" aria-hidden="true" />El comando incluye tu llave personal: no lo compartas ni lo mandes en capturas. Si se filtra, revócala abajo y crea otra.</p>
-        </div>
-      </li>
-      <li>
-        <span className="mcp-step-n" aria-hidden="true">3</span>
-        <div>
-          <h4>Abre Claude Code y pídele lo que necesites</h4>
-          <p>En la misma ventana escribe <code className="mcp-inline">claude</code> y presiona <kbd>Enter</kbd> (o usa la pestaña Code de la app de Claude). Para comprobar la conexión escribe <code className="mcp-inline">/mcp</code>: debe aparecer <strong>sag</strong> como conectado.</p>
-          <ul className="mcp-examples">{SUGGESTIONS.map(t => <li key={t}>«{t}»</li>)}</ul>
-          <p className="mcp-how">¿No tienes Claude Code? Instálalo desde <a className="text-link" href="https://claude.com/claude-code" target="_blank" rel="noopener noreferrer">claude.com/claude-code</a> y vuelve a este paso.</p>
-        </div>
-      </li>
+      <li><span className="mcp-step-n" aria-hidden="true">1</span><div>
+        <h4>Abre Claude Code</h4>
+        <p>En la app de Claude, pestaña <strong>Code</strong>, abre una sesión.</p>
+      </div></li>
+      <li><span className="mcp-step-n" aria-hidden="true">2</span><div>
+        <h4>Pégale este prompt</h4>
+        <div className="mcp-command"><code>{prompt}</code><CopyButton text={prompt} /></div>
+        <p className="mcp-how">Si te pide permiso para editar el archivo, acéptalo. Luego abre una sesión nueva y listo: ya puedes pedirle, por ejemplo:</p>
+        <ul className="mcp-examples">{SUGGESTIONS.map(t => <li key={t}>«{t}»</li>)}</ul>
+      </div></li>
     </ol>}
     {keys && keys.length > 0 && <ul className="mcp-keys">{keys.map(k => <li key={k.id}>
       <Key size={16} aria-hidden="true" /><span><strong>{k.label}</strong><small>Creada {formatDate(k.createdAt, { year: 'numeric' })} · {k.lastUsedAt ? `último uso ${formatDate(k.lastUsedAt)}` : 'sin usar todavía'}</small></span>
       <Button size="sm" variant="ghost" onClick={() => revoke(k)} disabled={busy}>Revocar</Button>
     </li>)}</ul>}
   </section>;
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() { try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 2500); } catch { /* el texto se puede seleccionar a mano */ } }
+  return <Button size="sm" variant={copied ? 'secondary' : 'primary'} onClick={copy}>{copied ? <><Check size={14} weight="bold" />Copiado</> : <><Copy size={14} />Copiar</>}</Button>;
 }
