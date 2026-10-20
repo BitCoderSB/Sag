@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Dropdown from '@radix-ui/react-dropdown-menu';
-import { House, Kanban, Sun, Moon, SquaresFour, UsersThree, ListChecks, ChartBar, GearSix, Sparkle, MagnifyingGlass, Plus, SignOut, CaretUpDown, List, X, WarningCircle, Check, Eye } from '@phosphor-icons/react';
+import { House, Kanban, Sun, Moon, SquaresFour, UsersThree, ListChecks, ChartBar, GearSix, Sparkle, MagnifyingGlass, Plus, SignOut, CaretUpDown, List, X, WarningCircle, Check, Eye, ArrowRight } from '@phosphor-icons/react';
 import type { Session, Workspace, Role } from '../shared/types';
 import { AREAS } from '../shared/types';
 import { api, post, setCsrf, todoCount, scoped } from './lib';
@@ -143,6 +143,7 @@ export default function App() {
       </nav>
       <div className="sidebar-bottom">
         {session.demo && <p className="demo-flag">Datos de ejemplo</p>}
+        <button type="button" className="sidebar-claude" onClick={() => { setMobileNav(false); navigate('settings', { s: 'claude' }); }}><Sparkle size={16} weight="fill" aria-hidden="true" /><span>Conectar con Claude</span><ArrowRight size={13} aria-hidden="true" /></button>
         <div className="theme-switch" role="radiogroup" aria-label="Tema">
           <button type="button" role="radio" aria-checked={theme === 'light'} onClick={() => setTheme('light')}><Sun size={15} weight={theme === 'light' ? 'fill' : 'regular'} aria-hidden="true" />Claro</button>
           <button type="button" role="radio" aria-checked={theme === 'dark'} onClick={() => setTheme('dark')}><Moon size={15} weight={theme === 'dark' ? 'fill' : 'regular'} aria-hidden="true" />Oscuro</button>

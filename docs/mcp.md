@@ -5,7 +5,7 @@ SAG expone un servidor MCP en `/mcp` (HTTP «streamable», sin estado). Cada per
 ## Conectarse (una vez)
 
 1. En SAG: menú de la cuenta → **Configuración** → **Claude Code** → «Crear llave y conectar».
-2. Copiar el comando que aparece y pegarlo en una terminal:
+2. Abrir el «Símbolo del sistema» de Windows (Buscar en la barra de Windows → escribir `cmd` → abrir), pegar el comando y presionar Enter. También hay un acceso «Conectar con Claude» en la barra lateral.
 
 ```bash
 claude mcp add --transport http --scope user sag https://vps-cfbba576.vps.ovh.ca/mcp --header "Authorization: Bearer sag_…"
