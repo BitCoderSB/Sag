@@ -3488,3 +3488,18 @@ body.is-dragging .bank-person:not(.is-over-drop) { box-shadow: inset 0 0 0 1px r
 .mcp-keys small { font-size: 12.5px; color: var(--muted); }
 :root[data-theme="light"] .mcp-command { background: #eef1f6; }
 :root[data-theme="light"] .mcp-connect { background: #eef3ff; box-shadow: inset 0 0 0 1px rgb(29 78 216 / .25); }
+
+.mcp-steps { display: flex; flex-direction: column; gap: 12px; margin: 8px 0 16px; counter-reset: none; }
+.mcp-steps > li { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 14px; padding: 16px 18px; border-radius: 14px; background: var(--surface); box-shadow: var(--card); }
+.mcp-steps > li > div { display: flex; flex-direction: column; gap: 8px; min-width: 0; font-size: 14px; color: var(--ink-2); }
+.mcp-steps h4 { font-size: 15.5px; font-weight: 600; color: var(--ink); }
+.mcp-step-n { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 999px; font-weight: 700; color: #fff; background: var(--accent); }
+.mcp-steps .segmented { align-self: flex-start; }
+.mcp-how { font-size: 13.5px; color: var(--ink-2); }
+.mcp-steps kbd { display: inline-block; padding: 1px 6px; border-radius: 5px; font: 600 12px/1.5 var(--font); color: var(--ink); background: rgb(255 255 255 / .08); box-shadow: inset 0 -1px 0 rgb(255 255 255 / .12), inset 0 0 0 1px rgb(255 255 255 / .12); }
+.mcp-inline { padding: 1px 6px; border-radius: 5px; font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; color: var(--ink); background: rgb(255 255 255 / .07); }
+.mcp-warn { display: flex; align-items: flex-start; gap: 7px; font-size: 13px; color: var(--warn); }
+.mcp-warn svg { flex-shrink: 0; margin-top: 2px; }
+:root[data-theme="light"] .mcp-steps kbd, :root[data-theme="light"] .mcp-inline { background: #eef1f6; box-shadow: inset 0 0 0 1px rgb(15 23 42 / .12); }
+:root[data-theme="light"] .mcp-warn { color: #92400e; }
+.mcp-steps h4 { margin: 0; padding-top: 5px; line-height: 1.35; } .mcp-steps > li > div > p { margin: 0; }
